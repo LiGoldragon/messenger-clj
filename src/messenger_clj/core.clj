@@ -105,7 +105,7 @@
 (def ^:dynamic *clock* nil)
 (def ^:dynamic *transport* nil)
 (def ^:dynamic *shell* shell)
-(def ^:dynamic *readiness-attempts* 50)
+(def ^:dynamic *readiness-attempts* 80)
 (def ^:dynamic *reservation-wait-ms* 15000)
 (def ^:dynamic *reservation-retry-ms* 50)
 ;; A test seam around the Orchestrate boundary.  Production always uses
@@ -404,6 +404,16 @@
      (select-keys right stable-route-keys)))
 (defn refresh-route-snapshot [route agent]
   (route-binding! (assoc route :name (:name agent) :agent (:agent agent))))
+(defn pending-readiness? [route] (= "PendingReadiness" (:state route)))
+(defn ready-route [route live]
+  (route-binding! (cond-> (refresh-route-snapshot route live)
+                    (pending-readiness? route) (dissoc :state))))
+(defn promote-ready-route! [flow route live]
+  (let [pending? (pending-readiness? route)
+        route (ready-route route live)]
+    (when pending?
+      (save-route! (registry) flow route))
+    route))
 (defn exact-live-agent [route]
   (let [hits (filter #(same-stable-route? route %) (live-agents))]
     (when-not (= 1 (count hits))
@@ -589,11 +599,12 @@
                 _ (assert-native-not-retired! native-thread flow)
                 _ (nonempty-strings! "Herdr registration has no agent kind" [(:agent a)])
                 proof (when-not (:interactive_ready a)
-                        (if readiness-marker
-                          (readiness-probe! a readiness-marker native-thread rollout)
-                          (fail "Agent is not interactively ready")))
+                        (when readiness-marker
+                          (readiness-probe! a readiness-marker native-thread rollout)))
                 route (valid! RouteBinding (cond-> (assoc (select-keys a [:session :name :pane_id :terminal_id :agent]) :native_thread native-thread)
-                                             proof (assoc :readiness_proof proof)) "RouteBinding")]
+                                             proof (assoc :readiness_proof proof)
+                                             (and (not (:interactive_ready a)) (not proof))
+                                             (assoc :state "PendingReadiness")) "RouteBinding")]
             (when (and existing (not (same-stable-route? existing route)))
               (fail "Flow is already registered to a different live route identity"))
             (when (some #(and (not= flow (key %)) (same-stable-route? route (val %)))
@@ -608,13 +619,13 @@
   (with-reservation flow
     (fn []
       (assert-not-retired! flow)
-      (let [pending (store/pending-by-id (root) pending-id)]
+      (let [pending (store/pending-by-id (root) pending-id)
+            existing (load-route (registry) flow)]
         (when-not (and pending (= flow (get-in pending [:attempt :flow]))
                        (= :RepairRequired (get-in pending [:attempt :reason])))
           (fail "Repair pending intent is absent, already submitted, or belongs to another Flow"))
-        (let [existing (load-route (registry) flow)]
-          (when (:route_hold existing) (fail "RouteHold"))
-          (when (in-transition? existing) (fail "InTransition")))
+        (when (:route_hold existing) (fail "RouteHold"))
+        (when (in-transition? existing) (fail "InTransition"))
         (let [expected {:session session :pane_id pane-id :terminal_id terminal-id
                         :name name :agent agent-kind}
               hits (filter #(= expected (select-keys % exact-agent-keys)) (live-agents))]
@@ -623,6 +634,11 @@
                       "Repair candidate is ambiguous")))
           (let [route (or (checked-repair-candidate (first hits))
                           (fail "Repair candidate identity or official agent_session changed"))
+                route (cond-> route
+                        (and (:readiness_proof existing)
+                             (= (:native_thread route)
+                                (get-in existing [:readiness_proof :thread_id])))
+                        (assoc :readiness_proof (:readiness_proof existing)))
                 _ (assert-native-not-retired! (:native_thread route) flow)
                 _ (when (some #(and (not= flow (key %)) (same-stable-route? route (val %)))
                               (route-records))
@@ -836,12 +852,12 @@
     (with-reservation flow
       (fn []
         (assert-not-retired! flow)
-        (let [route (read-route flow)]
+          (let [route (read-route flow)]
           (when (needs-binding? route) (held! flow :NeedsBinding request route))
           (when (in-transition? route) (held! flow :InTransition request route))
           (when (:route_hold route) (held! flow :RouteHold request route))
           (let [live (try (verify-target! route) (catch Exception error (held! flow (held-reason error) request route)))
-                route (refresh-route-snapshot route live)
+                route (promote-ready-route! flow route live)
                 keys (get abrupt-keys (:agent route))]
             (when-not keys (fail (str "Hard-abrupt is not supported for " (:agent route) "; nothing sent")))
             (let [envelope (message-envelope sender request)
@@ -907,7 +923,7 @@
                                (if (contains? #{:NotReady :Blocked :Uncertain} reason)
                                  (held! flow reason request route)
                                  (hold-repair-required! flow raw-stored pane request)))))
-                 route (refresh-route-snapshot route live)
+                 route (promote-ready-route! flow route live)
                  envelope (message-envelope sender request)
                  _ (try (prompt-request! route envelope wait-presented)
                         (catch Exception error

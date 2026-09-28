@@ -1,7 +1,7 @@
 { lib, stdenvNoCC, babashka-unwrapped, uberjar, datalevinPod, launcher, config }:
 stdenvNoCC.mkDerivation {
   pname = "messenger-clj";
-  version = "0.2.6";
+  version = "0.2.7";
   dontUnpack = true;
   dontBuild = true;
   installPhase = ''
