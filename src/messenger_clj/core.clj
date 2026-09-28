@@ -288,9 +288,12 @@
   (when-let [marker (retirement! flow)]
     (fail (str "Retired: " flow " by " (get-in marker [:evidence :path])))))
 (defn assert-native-not-retired! [native-thread flow]
+  ;; Another Flow's marker blocks only by its stored native thread.  Its
+  ;; evidence file belongs to that Flow's own checks; a missing or moved
+  ;; witness of an unrelated retirement must not refuse this Flow.
   (doseq [marker (store/retirements (root))
           :let [other (:flow marker)]]
-    (when (and (not= flow other) (= native-thread (:native_thread (retirement! other))))
+    (when (and (not= flow other) (= native-thread (:native_thread marker)))
       (fail (str "Native thread " native-thread " is retired as Flow " other "; use a fresh native session")))))
 (defn claude-session-matches? [process native]
   (and (int? (:pid process))

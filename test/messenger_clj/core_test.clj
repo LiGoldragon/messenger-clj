@@ -817,3 +817,20 @@
           (is (thrown? Exception (hm/assert-not-retired! "broken"))))
         (is (= "Retired imported: delivery is blocked before Herdr routing"
                (hm/retire! "imported" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest true)))))))
+
+(deftest another-flows-missing-retirement-evidence-does-not-refuse-this-flow
+  (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-cross-"}))
+        evidence (fs/create-temp-file {:prefix "hm-evidence-"})]
+    (spit (str evidence) "witness")
+    (binding [hm/*root* root-path hm/*with-reservation* pass-reservation]
+      (persist-route! root-path route)
+      (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence (hm/sha256 evidence) false)
+      (fs/delete evidence)
+      ;; The unrelated Flow's own marker still refuses it, as malformed.
+      (is (thrown-with-msg? Exception #"Retirement marker for 00f95a is unavailable or malformed"
+                            (hm/assert-not-retired! "00f95a")))
+      ;; Another Flow on a fresh native thread is not refused by it.
+      (is (nil? (hm/assert-native-not-retired! "11111111-1111-1111-1111-111111111111" "6f51ad")))
+      ;; The retired native thread itself stays blocked for every other Flow.
+      (is (thrown-with-msg? Exception #"is retired as Flow 00f95a"
+                            (hm/assert-native-not-retired! (:native_thread route) "6f51ad"))))))
