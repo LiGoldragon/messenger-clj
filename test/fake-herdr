@@ -8,7 +8,7 @@ record_prompt() {
 case "$*" in
   "session list --json")
     if [[ "${FAKE_HERDR_LIST:-ok}" == fail ]]; then printf '%s\n' '{"error":{"code":"unavailable"}}'; exit 1; fi
-    printf '%s\n' '{"sessions":[{"name":"s","running":true}]}' ;;
+    printf '{"sessions":[{"name":"s","running":true,"socket_path":"%s"}]}\n' "$XDG_CONFIG_HOME/herdr/sessions/s/herdr.sock" ;;
   "--session s agent list")
     if [[ "${FAKE_HERDR_AGENT_LIST:-live}" == empty ]]; then printf '%s\n' '{"agents":[]}'; else
       printf '{"agents":[{"name":"Mind Sol 00f95a","pane_id":"%s","terminal_id":"t","agent":"codex","agent_session":{"source":"herdr:codex","kind":"id","agent":"codex","value":"00000000-0000-0000-0000-000000000000"},"agent_status":"working"}]}\n' "$pane"

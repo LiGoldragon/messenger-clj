@@ -209,9 +209,13 @@
                           "--until" "blocked" "--timeout" "10000"])
 (def herdr-max-initial-request-bytes (* 1024 1024))
 (defn herdr-socket-path [session]
-  (let [config-home (or (System/getenv "XDG_CONFIG_HOME")
-                        (str (fs/path (System/getProperty "user.home") ".config")))]
-    (str (fs/path config-home "herdr" "sessions" session "herdr.sock"))))
+  (let [matches (filter #(= session (:name %)) (:sessions (herdr! "session" "list" "--json")))]
+    (when-not (= 1 (count matches))
+      (fail "Herdr session lookup did not return one exact session; do not blindly retry a send"))
+    (let [socket-path (:socket_path (first matches))]
+      (when-not (and (string? socket-path) (not (str/blank? socket-path)))
+        (fail "Herdr session has no socket_path; do not blindly retry a send"))
+      socket-path)))
 (defn herdr-prompt-request [route envelope wait-presented]
   {:id "messenger-clj:agent:prompt"
    :method "agent.prompt"

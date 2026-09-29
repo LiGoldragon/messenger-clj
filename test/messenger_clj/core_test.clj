@@ -504,7 +504,17 @@
            (first @calls)))
     (is (= ["s" {:id "messenger-clj:agent:prompt" :method "agent.prompt"
                   :params {:target "p" :text "#msg [\"sender\" \"y\"]"}}]
-           (second @calls)))))
+                  (second @calls)))))
+
+(deftest herdr-socket-path-comes-from-the-exact-live-session
+  (with-redefs [hm/herdr! (fn [& args]
+                            (is (= ["session" "list" "--json"] args))
+                            {:sessions [{:name "default" :socket_path "/home/li/.config/herdr/herdr.sock"}
+                                        {:name "other" :socket_path "/home/li/.config/herdr/sessions/other/herdr.sock"}]})]
+    (is (= "/home/li/.config/herdr/herdr.sock" (hm/herdr-socket-path "default"))))
+  (with-redefs [hm/herdr! (fn [& _] {:sessions [{:name "default"}]})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no socket_path"
+                          (hm/herdr-socket-path "default")))))
 
 (deftest herdr-socket-preflight-enforces-the-real-json-line-limit
   (let [base-request (hm/herdr-prompt-request route "" false)
