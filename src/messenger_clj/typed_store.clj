@@ -17,15 +17,10 @@
              (throw (ex-info (str "Datalevin pod lacks " symbol) {})))
          args))
 
-(def ReadinessProof
-  [:map {:closed true}
-   [:thread_id :string] [:rollout :string] [:marker :string]
-   [:evidence_kind {:optional true} :string]])
 (def Route
   [:map {:closed true}
    [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string]
    [:agent :string] [:native_thread {:optional true} :string]
-   [:readiness_proof {:optional true} ReadinessProof]
    [:route_hold {:optional true} :string]
    [:transition {:optional true} :boolean]
    [:state :string]])
@@ -34,7 +29,6 @@
    [:session {:optional true} :string] [:name {:optional true} :string]
    [:pane_id {:optional true} :string] [:terminal_id {:optional true} :string]
    [:agent {:optional true} :string] [:native_thread {:optional true} :string]
-   [:readiness_proof {:optional true} ReadinessProof]
    [:route_hold {:optional true} :string] [:transition {:optional true} :boolean]
    [:state {:optional true} :string]])
 (def Attempt
@@ -67,8 +61,6 @@
                 :db/unique :db.unique/identity}
    :route/session {} :route/name {} :route/pane {} :route/terminal {}
    :route/agent {} :route/thread {} :route/hold {} :route/transition {} :route/state {}
-   :route/readiness-thread {} :route/readiness-rollout {} :route/readiness-marker {}
-   :route/readiness-kind {}
    :attempt/id {:db/unique :db.unique/identity}
    :attempt/flow {:db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
    :attempt/at {} :attempt/grade {} :attempt/reason {} :attempt/variant {}
@@ -77,8 +69,6 @@
    :attempt.binding/session {} :attempt.binding/name {} :attempt.binding/pane {}
    :attempt.binding/terminal {} :attempt.binding/agent {} :attempt.binding/thread {}
    :attempt.binding/hold {} :attempt.binding/transition {} :attempt.binding/state {}
-   :attempt.binding/readiness-thread {} :attempt.binding/readiness-rollout {}
-   :attempt.binding/readiness-marker {} :attempt.binding/readiness-kind {}
    :pending/id {:db/unique :db.unique/identity}
    :pending/attempt {:db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
    :pending/message {} :pending/variant {} :pending/context {}
@@ -128,80 +118,48 @@
 (defn- assoc-present [m k v] (if (nil? v) m (assoc m k v)))
 
 (defn- route-attrs [prefix route]
-  (let [route (route! route)
-        proof (:readiness_proof route)]
+  (let [route (route! route)]
     (-> {}
-        (assoc (keyword prefix "session") (:session route)
-               (keyword prefix "name") (:name route)
-               (keyword prefix "pane") (:pane_id route)
-               (keyword prefix "terminal") (:terminal_id route)
-               (keyword prefix "agent") (:agent route)
-               (keyword prefix "state") (:state route))
+        (assoc (keyword prefix "session") (:session route) (keyword prefix "name") (:name route)
+               (keyword prefix "pane") (:pane_id route) (keyword prefix "terminal") (:terminal_id route)
+               (keyword prefix "agent") (:agent route) (keyword prefix "state") (:state route))
         (assoc-present (keyword prefix "thread") (:native_thread route))
         (assoc-present (keyword prefix "hold") (:route_hold route))
-        (assoc-present (keyword prefix "transition") (:transition route))
-        (assoc-present (keyword prefix "readiness-thread") (:thread_id proof))
-        (assoc-present (keyword prefix "readiness-rollout") (:rollout proof))
-        (assoc-present (keyword prefix "readiness-marker") (:marker proof))
-        (assoc-present (keyword prefix "readiness-kind") (:evidence_kind proof)))))
-
+        (assoc-present (keyword prefix "transition") (:transition route)))))
 (defn- attrs-route! [prefix entity]
-  (let [getv #(get entity (keyword prefix %))
-        proof (when-let [thread (getv "readiness-thread")]
-                (cond-> {:thread_id thread
-                         :rollout (getv "readiness-rollout")
-                         :marker (getv "readiness-marker")}
-                  (getv "readiness-kind") (assoc :evidence_kind (getv "readiness-kind"))))]
-    (route!
-     (cond-> {:session (getv "session") :name (getv "name")
-              :pane_id (getv "pane") :terminal_id (getv "terminal")
-              :agent (getv "agent") :state (getv "state")}
-       (getv "thread") (assoc :native_thread (getv "thread"))
-       (getv "hold") (assoc :route_hold (getv "hold"))
-       (some? (getv "transition")) (assoc :transition (getv "transition"))
-       proof (assoc :readiness_proof proof)))))
-
+  (let [getv #(get entity (keyword prefix %))]
+    (route! (cond-> {:session (getv "session") :name (getv "name") :pane_id (getv "pane")
+                     :terminal_id (getv "terminal") :agent (getv "agent") :state (getv "state")}
+              (getv "thread") (assoc :native_thread (getv "thread"))
+              (getv "hold") (assoc :route_hold (getv "hold"))
+              (some? (getv "transition")) (assoc :transition (getv "transition"))))))
 (defn- binding-attrs [binding]
-  (let [proof (:readiness_proof binding)]
-    (-> {}
-        (assoc-present :attempt.binding/session (:session binding))
-        (assoc-present :attempt.binding/name (:name binding))
-        (assoc-present :attempt.binding/pane (:pane_id binding))
-        (assoc-present :attempt.binding/terminal (:terminal_id binding))
-        (assoc-present :attempt.binding/agent (:agent binding))
-        (assoc-present :attempt.binding/thread (:native_thread binding))
-        (assoc-present :attempt.binding/hold (:route_hold binding))
-        (assoc-present :attempt.binding/transition (:transition binding))
-        (assoc-present :attempt.binding/state (:state binding))
-        (assoc-present :attempt.binding/readiness-thread (:thread_id proof))
-        (assoc-present :attempt.binding/readiness-rollout (:rollout proof))
-        (assoc-present :attempt.binding/readiness-marker (:marker proof))
-        (assoc-present :attempt.binding/readiness-kind (:evidence_kind proof)))))
+  (-> {}
+      (assoc-present :attempt.binding/session (:session binding))
+      (assoc-present :attempt.binding/name (:name binding))
+      (assoc-present :attempt.binding/pane (:pane_id binding))
+      (assoc-present :attempt.binding/terminal (:terminal_id binding))
+      (assoc-present :attempt.binding/agent (:agent binding))
+      (assoc-present :attempt.binding/thread (:native_thread binding))
+      (assoc-present :attempt.binding/hold (:route_hold binding))
+      (assoc-present :attempt.binding/transition (:transition binding))
+      (assoc-present :attempt.binding/state (:state binding))))
 (defn- attrs-binding! [entity]
-  (let [proof (when-let [thread (:attempt.binding/readiness-thread entity)]
-                (cond-> {:thread_id thread
-                         :rollout (:attempt.binding/readiness-rollout entity)
-                         :marker (:attempt.binding/readiness-marker entity)}
-                  (:attempt.binding/readiness-kind entity)
-                  (assoc :evidence_kind (:attempt.binding/readiness-kind entity))))]
-    (valid! AttemptBinding
-            (cond-> {}
-              (:attempt.binding/session entity) (assoc :session (:attempt.binding/session entity))
-              (:attempt.binding/name entity) (assoc :name (:attempt.binding/name entity))
-              (:attempt.binding/pane entity) (assoc :pane_id (:attempt.binding/pane entity))
-              (:attempt.binding/terminal entity) (assoc :terminal_id (:attempt.binding/terminal entity))
-              (:attempt.binding/agent entity) (assoc :agent (:attempt.binding/agent entity))
-              (:attempt.binding/thread entity) (assoc :native_thread (:attempt.binding/thread entity))
-              (:attempt.binding/hold entity) (assoc :route_hold (:attempt.binding/hold entity))
-              (some? (:attempt.binding/transition entity))
-              (assoc :transition (:attempt.binding/transition entity))
-              (:attempt.binding/state entity) (assoc :state (:attempt.binding/state entity))
-              proof (assoc :readiness_proof proof)))))
+  (valid! AttemptBinding
+          (cond-> {}
+            (:attempt.binding/session entity) (assoc :session (:attempt.binding/session entity))
+            (:attempt.binding/name entity) (assoc :name (:attempt.binding/name entity))
+            (:attempt.binding/pane entity) (assoc :pane_id (:attempt.binding/pane entity))
+            (:attempt.binding/terminal entity) (assoc :terminal_id (:attempt.binding/terminal entity))
+            (:attempt.binding/agent entity) (assoc :agent (:attempt.binding/agent entity))
+            (:attempt.binding/thread entity) (assoc :native_thread (:attempt.binding/thread entity))
+            (:attempt.binding/hold entity) (assoc :route_hold (:attempt.binding/hold entity))
+            (some? (:attempt.binding/transition entity)) (assoc :transition (:attempt.binding/transition entity))
+            (:attempt.binding/state entity) (assoc :state (:attempt.binding/state entity)))))
 
 (def route-pull
   [:route/session :route/name :route/pane :route/terminal :route/agent :route/thread
-   :route/hold :route/transition :route/state :route/readiness-thread
-   :route/readiness-rollout :route/readiness-marker :route/readiness-kind
+   :route/hold :route/transition :route/state
    {:route/flow [:flow/id]}])
 (def attempt-pull
   [:attempt/id :attempt/at :attempt/grade :attempt/reason :attempt/variant
@@ -210,8 +168,6 @@
    :attempt.binding/session :attempt.binding/name :attempt.binding/pane
    :attempt.binding/terminal :attempt.binding/agent :attempt.binding/thread
    :attempt.binding/hold :attempt.binding/transition :attempt.binding/state
-   :attempt.binding/readiness-thread :attempt.binding/readiness-rollout
-   :attempt.binding/readiness-marker :attempt.binding/readiness-kind
    {:attempt/flow [:flow/id]}])
 (def pending-pull
   [:pending/message :pending/variant :pending/context :pending/part-index

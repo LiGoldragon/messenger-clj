@@ -438,16 +438,14 @@
     (let [held (g1-send root-path transport "00f95a" "repair then send" false nil 0)
           pending (first (store/pending-for root-path "00f95a"))
           pending-id (get-in pending [:attempt :id])
-          proof {:thread_id (:native_thread route) :rollout "/tmp/exact-readiness.jsonl"
-                 :marker "HM_READY_12345678"}]
+]
       (is (re-find #"Held\.\{ 00f95a RepairRequired" held))
       (is (empty? @prompts))
       (is (= 1 (count (filter #(= :RepairCandidate (:reason %))
                               (store/attempts-for root-path "00f95a")))))
       (persist-route! root-path {:session "messaging-build" :pane_id "w17:p1"
                                  :terminal_id "term-live" :name "Psyche Opus 00f95a"
-                                 :agent "claude" :native_thread (:native_thread route)
-                                 :readiness_proof proof})
+                                 :agent "claude" :native_thread (:native_thread route)})
       (binding [hm/*root* root-path hm/*flow-id* "sender"
                 hm/*with-reservation* pass-reservation hm/*transport* transport]
         (is (= "Transported.{ 00f95a idle }"
@@ -462,7 +460,6 @@
           attempts (store/attempts-for root-path "00f95a")]
       (is (= "term-live" (:terminal_id stored)))
       (is (= (:native_thread route) (:native_thread stored)))
-      (is (= "HM_READY_12345678" (get-in stored [:readiness_proof :marker])))
       (is (= 1 (count (filter #(= :RouteRepaired (:reason %)) attempts))))
       (is (= 1 (count (filter #(= :sent (:reason %)) attempts)))))))
 
@@ -551,7 +548,8 @@
                         (try (hm/send! "00f95a" "body" false nil)
                              (catch Exception error (.getMessage error)))))]
     (is (re-find #"RepairRequired" (send-result (assoc good-agent :agent "other") good-process)))
-    (is (re-find #"NotReady" (send-result (assoc good-agent :interactive_ready false) good-process)))
+    (is (= "Transported.{ 00f95a working }"
+           (send-result (assoc good-agent :interactive_ready false) good-process)))
     (is (re-find #"RepairRequired"
                  (send-result (assoc good-agent :agent_session
                                      {:source "herdr:claude" :kind "id" :agent "codex"
@@ -566,9 +564,9 @@
               hm/*transport* (fake-transport good-agent good-agent good-process prompts)]
       (is (re-find #"Reservation refused" (try (hm/send! "00f95a" "body" false nil)
                                                (catch Exception error (.getMessage error))))))
-    (is (zero? @prompts))
+    (is (= 1 @prompts))
     (is (= "Transported.{ 00f95a working }" (send-result good-agent good-process)))
-    (is (= 1 @prompts))))
+    (is (= 2 @prompts))))
 
 (deftest held-routes-large-bodies-and-post-prompt-ledger-failure-are-honest
   (let [root-path (str (fs/create-temp-dir {:prefix "hm-p0-"}))
@@ -645,81 +643,24 @@
                     "00f95a\tMind Sol 00f95a\ts\tSTALE")
                (hm/listing!)))))))
 
-(deftest readiness-probe-requires-exact-native-turns
-  (let [marker "HM_READY_12345678"
-        transcript (fs/create-temp-file {:prefix "hm-rollout-" :suffix ".jsonl"})
-        prompts (atom 0)
-        agent (assoc route :interactive_ready false)
-        transport (reify hm/HerdrTransport
-                    (live-agents* [_] [agent])
-                    (target-agent* [_ _] {:agent agent})
-                    (process-info* [_ _] {:process_info {:foreground_processes []}})
-                    (pane* [_ _] {:pane {}})
-                    (move-pane* [_ _ _ _] {:move_result {}})
-                    (send-keys* [_ _ _] {:ok true})
-                    (prompt!* [_ _ _ _] (swap! prompts inc) {:ok true}))
-        user {:type "event_msg" :payload {:thread_id (:native_thread route)
-                                          :item {:type "UserMessage" :content [{:text (str "Reply " marker)}]}}}
-        reply {:type "event_msg" :payload {:thread_id (:native_thread route)
-                                           :item {:type "AgentMessage" :content [{:text marker}]}}}]
-    (spit (str transcript) (str (json/generate-string user) "\n" (json/generate-string reply) "\n"))
-    (binding [hm/*transport* transport hm/*readiness-attempts* 1]
-      (is (= {:thread_id (:native_thread route) :rollout (str (fs/absolutize transcript)) :marker marker}
-             (hm/readiness-probe! agent marker (:native_thread route) transcript)))
-      (is (= 1 @prompts))
-      (is (thrown? Exception (hm/readiness-probe! agent "not-a-marker" (:native_thread route) transcript)))
-      (spit (str transcript) (str (json/generate-string {:type "user" :sessionId (:native_thread route) :message {:content marker}}) "\n"
-                                  (json/generate-string {:type "assistant" :sessionId (:native_thread route) :message {:content marker}}) "\n"))
-      (is (= "claude-transcript" (:evidence_kind (hm/readiness-probe! agent marker (:native_thread route) transcript))))
-      (spit (str transcript) (str (json/generate-string (assoc-in reply [:payload :thread_id] "different")) "\n"))
-      (is (thrown? Exception (hm/readiness-probe! agent marker (:native_thread route) transcript))))))
-
-(deftest readiness-window-exceeds-seven-seconds
-  (is (>= (* hm/*readiness-attempts* 100) 8000)))
-
-(deftest register-persists-proof-for-a-not-ready-agent
-  (let [root-path (str (fs/create-temp-dir {:prefix "hm-register-proof-"}))
-        marker "HM_READY_87654321"
-        transcript (fs/create-temp-file {:prefix "hm-register-rollout-" :suffix ".jsonl"})
-        agent (assoc route :interactive_ready false)
-        rows [{:type "event_msg" :payload {:thread_id (:native_thread route)
-                                           :item {:type "UserMessage" :content [{:text marker}]}}}
-              {:type "event_msg" :payload {:thread_id (:native_thread route)
-                                           :item {:type "AgentMessage" :content [{:text marker}]}}}]]
-    (spit (str transcript) (str/join "\n" (map json/generate-string rows)))
-    (binding [hm/*root* root-path hm/*readiness-attempts* 1]
-      (with-redefs [hm/herdr! (fn [& args]
-                                (cond
-                                  (some #{"list"} args) {:agents [agent]}
-                                  (some #{"process-info"} args) {:process_info {:foreground_processes []}}
-                                  :else {:agent agent}))
-                    hm/direct-prompt! (fn [& _] {:ok true})]
-        (is (= "Registered 00f95a: Mind Sol 00f95a (s)"
-               (hm/register! "00f95a" (:name route) "s" (:native_thread route) nil nil)))
-        (is (= "PendingReadiness" (:state (hm/read-route "00f95a"))))
-        (is (= "Registered 00f95a: Mind Sol 00f95a (s)"
-               (hm/register! "00f95a" (:name route) "s" (:native_thread route) marker transcript)))
-        (is (= marker (get-in (hm/read-route "00f95a") [:readiness_proof :marker])))
-        (is (= "Bound" (:state (hm/read-route "00f95a"))))))))
-
-(deftest pending-registration-holds-then-promotes-on-a-ready-send
-  (let [root-path (str (fs/create-temp-dir {:prefix "hm-pending-registration-"}))
+(deftest register-and-deliver-ignore-readiness-flags-without-a-probe
+  (let [root-path (str (fs/create-temp-dir {:prefix "hm-no-readiness-"}))
         prompts (atom 0)
         busy (assoc route :interactive_ready false :agent_status "working")
-        ready (assoc route :interactive_ready true :agent_status "working")
-        process [{:argv ["codex" "--thread" (:native_thread route)]}]
-        pending (assoc route :state "PendingReadiness")]
-    (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation]
-      (persist-route! root-path pending)
-      (binding [hm/*transport* (fake-transport busy busy process prompts)]
-        (is (re-find #"NotReady" (try (hm/send! "00f95a" "held" false nil)
-                                        (catch Exception error (.getMessage error)))))
-        (is (= "PendingReadiness" (:state (hm/read-route "00f95a"))))
+        missing (dissoc (assoc route :agent_status "working") :interactive_ready)
+        process [{:argv ["codex" "--thread" (:native_thread route)]}]]
+    (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation
+              hm/*transport* (fake-transport busy busy process prompts)]
+      (with-redefs [hm/herdr! (fn [& args]
+                                (if (some #{"list"} args) {:agents [busy]}
+                                    (throw (ex-info "unexpected Herdr call" {}))))]
+        (is (= "Registered 00f95a: Mind Sol 00f95a (s)"
+               (hm/register! "00f95a" (:name route) "s" (:native_thread route))))
         (is (zero? @prompts)))
-      (binding [hm/*transport* (fake-transport ready ready process prompts)]
+      (binding [hm/*transport* (fake-transport missing missing process prompts)]
         (is (= "Transported.{ 00f95a working }" (hm/send! "00f95a" "deliver once" false nil)))
-        (is (= "Bound" (:state (hm/read-route "00f95a"))))
-        (is (= 1 @prompts))))))
+        (is (= 1 @prompts))
+        (is (= (:native_thread route) (:native_thread (hm/read-route "00f95a"))))))))
 
 (deftest register-uses-only-the-official-herdr-agent-session
   (let [root-path (str (fs/create-temp-dir {:prefix "hm-register-session-"}))
@@ -735,7 +676,7 @@
                                   {:agents [agent]}
                                   (throw (ex-info "process-info must not be used for registration" {}))))]
         (is (= "Registered 00f95a: Mind Sol 00f95a (s)"
-               (hm/register! "00f95a" (:name route) "s" nil nil nil)))
+               (hm/register! "00f95a" (:name route) "s" nil)))
         (is (= official (:native_thread (hm/read-route "00f95a"))))))))
 
 (deftest register-rejects-untrusted-or-conflicting-native-session-without-persistence
@@ -766,7 +707,7 @@
                                     {:agents [agent]}
                                     (throw (ex-info "unexpected Herdr call" {}))))]
           (is (thrown? Exception
-                       (hm/register! "00f95a" (:name route) "s" explicit nil nil))
+                       (hm/register! "00f95a" (:name route) "s" explicit))
               label)
           (is (nil? (store/route-for root-path "00f95a")) label))))))
 
@@ -783,7 +724,7 @@
                                   {:agents [renamed]}
                                   {:process_info {:foreground_processes process}}))]
         (is (= "Registered 00f95a: Psyche Opus 88475f (s)"
-               (hm/register! "00f95a" (:name route) "s" (:native_thread route) nil nil)))
+               (hm/register! "00f95a" (:name route) "s" (:native_thread route))))
         (is (= "Psyche Opus 88475f" (:name (hm/read-route "00f95a"))))))))
 
 (deftest deregister-and-rebind-keep-an-exact-live-binding

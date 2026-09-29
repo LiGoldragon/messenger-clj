@@ -9,8 +9,7 @@
 
 (def thread "00000000-0000-0000-0000-000000000000")
 (def route {:session "s" :name "Alpha" :pane_id "p" :terminal_id "t" :agent "codex"
-            :native_thread thread
-            :readiness_proof {:thread_id thread :rollout "/tmp/rollout.jsonl" :marker "HM_READY_alpha"}})
+            :native_thread thread})
 (def pending-id "11111111111111111111111111111111")
 (def sent-id "22222222222222222222222222222222")
 (def orphan-id "33333333333333333333333333333333")

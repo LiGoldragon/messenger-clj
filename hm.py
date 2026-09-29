@@ -236,71 +236,7 @@ class Messenger:
                     found.append(dict(agent, session=item['name']))
         return found
 
-    def readiness_probe(self, agent, marker, native_thread, rollout):
-        if not re.fullmatch(r'HM_READY_[A-Za-z0-9_-]{8,96}', marker):
-            raise Failure('Readiness probe marker must be a unique HM_READY token')
-        if not re.fullmatch(r'[A-Za-z0-9-]{16,96}', native_thread):
-            raise Failure('Readiness probe requires the exact native thread ID')
-        prompt = f'Reply exactly {marker} to confirm this explicit HM readiness probe.'
-        result = run(['herdr', '--session', agent['session'], 'agent', 'prompt', agent['pane_id'], prompt])
-        try:
-            reply = json.loads(result)
-        except ValueError as error:
-            raise Failure('Herdr returned invalid readiness-probe JSON') from error
-        error = reply.get('error')
-        # Herdr 0.8.2 may return agent_prompt_stalled after injecting a prompt
-        # into a resumed Codex terminal. It is usable only with the following
-        # exact native assistant-turn witness; every other error is a refusal.
-        if error and error.get('code') != 'agent_prompt_stalled':
-            raise Failure(f'Herdr readiness probe failed: {error}')
-        if not rollout:
-            raise Failure('Readiness probe requires a native Codex rollout or Claude transcript')
-        for _ in range(50):
-            try:
-                rows = [json.loads(line) for line in Path(rollout).read_text().splitlines() if line]
-            except (OSError, ValueError) as error:
-                raise Failure('Readiness probe rollout is unavailable or invalid') from error
-            user_at = next((index for index, row in enumerate(rows)
-                            if row.get('type') == 'event_msg'
-                            and row.get('payload', {}).get('thread_id') == native_thread
-                            and row.get('payload', {}).get('item', {}).get('type') == 'UserMessage'
-                            and marker in ''.join(part.get('text', '') for part in row.get('payload', {}).get('item', {}).get('content', []))), None)
-            if user_at is not None:
-                for row in rows[user_at + 1:]:
-                    payload = row.get('payload', {})
-                    item = payload.get('item', {})
-                    if payload.get('thread_id') == native_thread and item.get('type') == 'AgentMessage':
-                        text = ''.join(part.get('text', '') for part in item.get('content', []))
-                        if text.strip() == marker:
-                            return {'thread_id': native_thread, 'rollout': str(Path(rollout).resolve()), 'marker': marker}
-            # Claude records native turns in its transcript schema rather than
-            # Codex's event_msg rollout schema.  The same evidence rule holds:
-            # an exact native user probe must be followed by an exact native
-            # assistant reply in the same session.  A pane rendering or a
-            # bridge status line alone is never readiness evidence.
-            user_at = next((index for index, row in enumerate(rows)
-                            if row.get('type') == 'user'
-                            and row.get('sessionId', row.get('session_id')) == native_thread
-                            and marker in self._claude_text(row.get('message', {}).get('content'))), None)
-            if user_at is not None:
-                for row in rows[user_at + 1:]:
-                    if (row.get('type') == 'assistant'
-                            and row.get('sessionId', row.get('session_id')) == native_thread
-                            and self._claude_text(row.get('message', {}).get('content')).strip() == marker):
-                        return {'thread_id': native_thread, 'rollout': str(Path(rollout).resolve()), 'marker': marker,
-                                'evidence_kind': 'claude-transcript'}
-            time.sleep(0.1)
-        raise Failure('Readiness probe marker was not observed in an exact native assistant reply')
-
-    @staticmethod
-    def _claude_text(content):
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return ''.join(part.get('text', '') for part in content if isinstance(part, dict))
-        return ''
-
-    def register(self, flow, name, session=None, readiness_probe=None, native_thread=None, rollout=None):
+    def register(self, flow, name, session=None, native_thread=None):
         path = self.path(flow)
         with self.reservation(flow):
             self.assert_not_retired(flow)
@@ -308,7 +244,7 @@ class Messenger:
             if prior and prior.get('route_hold'):
                 raise Failure('Registration is held for route repair; inspect exact terminal before registration')
             native_thread = (native_thread or (prior or {}).get('native_thread')
-                             or (prior or {}).get('readiness_proof', {}).get('thread_id'))
+)
             # The native identity is the anti-alias binding: a display name or
             # pane can be recycled after reaping, but a retired native session
             # cannot silently become a new Flow registration.
@@ -320,16 +256,7 @@ class Messenger:
             agent = matches[0]
             if not agent.get('agent'):
                 raise Failure('Agent kind is unavailable')
-            if not agent.get('interactive_ready'):
-                if not readiness_probe:
-                    raise Failure('Agent is not interactively ready')
-                proof = self.readiness_probe(agent, readiness_probe, native_thread, rollout)
-            else:
-                proof = None
             record = {k: agent[k] for k in ('session', 'name', 'pane_id', 'terminal_id', 'agent')}
-            if proof:
-                record['readiness_proof'] = proof
-                native_thread = native_thread or proof['thread_id']
             if native_thread:
                 record['native_thread'] = native_thread
             if prior and self.route_fields(prior) != self.route_fields(record):
@@ -651,8 +578,6 @@ class Messenger:
             except Failure as error:
                 reason = str(error) if str(error) in {'IdentityChanged', 'ProcessMismatch'} else 'PaneMissing'
                 self._held(flow, reason, message, record)
-            if not live.get('interactive_ready') and 'readiness_proof' not in record:
-                self._held(flow, 'NotReady', message, record)
             if live.get('agent_status') == 'blocked':
                 self._held(flow, 'Blocked', message, record)
             if live.get('agent_status') not in {'idle', 'working', 'done'}:
@@ -672,15 +597,10 @@ class Messenger:
                     herdr(*args, 'send-keys', target, key)
             try:
                 framed = self._relay(os.environ['FLOW_ID'], flow, message)
-                if live.get('interactive_ready'):
-                    prompt_args = ('prompt', target, framed)
-                    if wait_presented:
-                        prompt_args += ('--wait', '--timeout', '5000')
-                    herdr(*args, *prompt_args)
-                else:
-                    response = json.loads(run(['herdr', *args, 'prompt', target, framed]))
-                    if response.get('error'):
-                        raise Failure('Prompt may have been delivered after readiness probe; inspect the exact target before retrying')
+                prompt_args = ('prompt', target, framed)
+                if wait_presented:
+                    prompt_args += ('--wait', '--timeout', '5000')
+                herdr(*args, *prompt_args)
                 if abrupt:
                     for key in ABRUPT_KEYS[record['agent']]['submit']:
                         herdr(*args, 'send-keys', target, key)
@@ -725,9 +645,7 @@ def main():
     register.add_argument('flow')
     register.add_argument('name')
     register.add_argument('--session')
-    register.add_argument('--readiness-probe', help='unique HM_READY marker; required only for a Herdr endpoint that omits interactive_ready')
-    register.add_argument('--native-thread', help='exact native thread for an omitted-readiness-field probe')
-    register.add_argument('--rollout', help='exact native rollout JSONL for an omitted-readiness-field probe')
+    register.add_argument('--native-thread', help='exact native thread identity')
     deregister = sub.add_parser('deregister')
     deregister.add_argument('flow')
     deregister.add_argument('--session', required=True)
@@ -782,7 +700,7 @@ def main():
     messenger = Messenger()
     try:
         if args.operation == 'register':
-            result = messenger.register(args.flow, args.name, args.session, args.readiness_probe, args.native_thread, args.rollout)
+            result = messenger.register(args.flow, args.name, args.session, args.native_thread)
         elif args.operation == 'deregister':
             result = messenger.deregister(args.flow, args.session, args.pane_id, args.terminal_id, args.name)
         elif args.operation == 'rebind':

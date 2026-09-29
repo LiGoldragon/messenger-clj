@@ -69,58 +69,15 @@ class MessengerTests(unittest.TestCase):
         self.assertEqual(actions[0], ('--session', 'test', 'agent', 'send-keys', 'w1:p2', 'esc'))
         self.assertEqual(actions[1][:5], ('--session', 'test', 'agent', 'prompt', 'w1:p2'))
 
-    def test_probe_registration_requires_exact_assistant_turn(self):
+    def test_registration_and_delivery_ignore_false_or_missing_readiness(self):
         self.agent['interactive_ready'] = False
-        marker = 'HM_READY_test1234'; native_thread = '11111111-2222-3333-4444-555555555555'
-        rollout = Path(self.temp.name) / 'rollout.jsonl'
-        rows = [
-            {'type':'event_msg','payload':{'thread_id':native_thread,'item':{'type':'UserMessage','content':[{'text':f'Reply exactly {marker}'}]}}},
-            {'type':'event_msg','payload':{'thread_id':native_thread,'item':{'type':'AgentMessage','content':[{'text':marker}]}}},
-        ]
-        rollout.write_text('\n'.join(__import__('json').dumps(r) for r in rows)+'\n')
-        def probe_run(argv):
-            if argv == ['herdr', '--session', 'test', 'agent', 'prompt', 'w1:p2', f'Reply exactly {marker} to confirm this explicit HM readiness probe.']:
-                return '{"error":{"code":"agent_prompt_stalled"}}'
-            raise AssertionError(argv)
-        with patch('hm.run', probe_run):
-            self.m.register('probed-flow', 'receiver', 'test', marker, native_thread, rollout)
-        self.assertEqual(self.m.read('probed-flow')['readiness_proof']['thread_id'], native_thread)
-
-    def test_probe_rejects_echo_only_or_wrong_thread(self):
-        self.agent['interactive_ready'] = False
-        marker = 'HM_READY_test1234'; native_thread = '11111111-2222-3333-4444-555555555555'
-        rollout = Path(self.temp.name) / 'echo.jsonl'
-        rows = [{'type':'event_msg','payload':{'thread_id':native_thread,'item':{'type':'UserMessage','content':[{'text':marker}]}}},
-                {'type':'event_msg','payload':{'thread_id':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','item':{'type':'AgentMessage','content':[{'text':marker}]}}}]
-        rollout.write_text('\n'.join(__import__('json').dumps(r) for r in rows)+'\n')
-        with patch('hm.run', return_value='{"error":{"code":"agent_prompt_stalled"}}'):
-            with self.assertRaisesRegex(hm.Failure, 'assistant reply'):
-                self.m.register('echo-flow', 'receiver', 'test', marker, native_thread, rollout)
-
-    def test_probe_registration_accepts_exact_claude_transcript_turn(self):
-        self.agent['interactive_ready'] = False
-        marker = 'HM_READY_claude1234'; native_thread = '11111111-2222-3333-4444-555555555555'
-        transcript = Path(self.temp.name) / 'claude.jsonl'
-        rows = [
-            {'type': 'user', 'sessionId': native_thread,
-             'message': {'content': f'Reply exactly {marker} to confirm this explicit HM readiness probe.'}},
-            {'type': 'assistant', 'sessionId': native_thread,
-             'message': {'content': [{'type': 'text', 'text': marker}]}},
-        ]
-        transcript.write_text('\n'.join(__import__('json').dumps(row) for row in rows) + '\n')
-        with patch('hm.run', return_value='{"error":{"code":"agent_prompt_stalled"}}'):
-            self.m.register('claude-probed-flow', 'receiver', 'test', marker, native_thread, transcript)
-        proof = self.m.read('claude-probed-flow')['readiness_proof']
-        self.assertEqual(proof['thread_id'], native_thread)
-        self.assertEqual(proof['evidence_kind'], 'claude-transcript')
-
-    def test_probe_requires_native_evidence_path(self):
-        self.agent['interactive_ready'] = False
-        with patch('hm.run', return_value='{"error":{"code":"agent_prompt_stalled"}}'):
-            with self.assertRaisesRegex(hm.Failure, 'native Codex rollout or Claude transcript'):
-                self.m.register('missing-evidence', 'receiver', 'test', 'HM_READY_missing1234',
-                                self.native_thread, None)
-
+        self.m.register('busy-flow', 'receiver', 'test', native_thread=self.native_thread)
+        self.assertFalse(any('prompt' in call for call in self.calls))
+        self.agent.pop('interactive_ready')
+        self.assertEqual(self.m.send('busy-flow', 'deliver once'), 'Transported.{ busy-flow working }')
+        prompt = next(call for call in self.calls if 'prompt' in call)
+        self.assertEqual(prompt[:5], ('--session', 'test', 'agent', 'prompt', 'w1:p2'))
+        self.assertEqual(self.m.read('busy-flow')['native_thread'], self.native_thread)
 
     def test_replaced_terminal_refuses_send(self):
         self.agent['terminal_id'] = 'replacement'

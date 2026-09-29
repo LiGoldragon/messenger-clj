@@ -9,7 +9,7 @@
                     hm/skill-note))
 (defn arg [xs option] (second (drop-while #(not= option %) xs)))
 (defn parse-error [message] (throw (ex-info message {:hm/parse true})))
-(def value-options #{"--session" "--native-thread" "--readiness-probe" "--rollout" "--old-name" "--pending-id" "--pane-id" "--terminal-id" "--name" "--agent" "--process-pid" "--evidence" "--evidence-sha256" "--hold-seconds" "--pane" "--target" "--receipt"})
+(def value-options #{"--session" "--native-thread" "--old-name" "--pending-id" "--pane-id" "--terminal-id" "--name" "--agent" "--process-pid" "--evidence" "--evidence-sha256" "--hold-seconds" "--pane" "--target" "--receipt"})
 (defn expand-equals [xs]
   (mapcat #(if-let [[_ option value] (re-matches #"(--[^=]+)=(.*)" %)] [option value] [%]) xs))
 (defn normalize-options [xs]
@@ -98,12 +98,11 @@
                                      :psyche (hm/send-abrupt-psyche! flow context body (boolean (some #{"--wait-presented"} rest)))
                                      :psyches (hm/send-abrupt-request! flow {:variant :psyches :body body} (boolean (some #{"--wait-presented"} rest)))
                                      (hm/send-abrupt! flow body (boolean (some #{"--wait-presented"} rest))))))
-          "register" (let [[flow name & rest] xs session (arg rest "--session") thread (arg rest "--native-thread")
-                           marker (arg rest "--readiness-probe") rollout (arg rest "--rollout")]
+          "register" (let [[flow name & rest] xs session (arg rest "--session") thread (arg rest "--native-thread")]
                        (when-not (and flow name) (parse-error "the following arguments are required: flow, name"))
-                       (unknown-flags! rest #{"--session" "--native-thread" "--readiness-probe" "--rollout"})
-                       (extra-values! rest #{"--session" "--native-thread" "--readiness-probe" "--rollout"})
-                       (println (hm/register! flow name session thread marker rollout)))
+                       (unknown-flags! rest #{"--session" "--native-thread"})
+                       (extra-values! rest #{"--session" "--native-thread"})
+                       (println (hm/register! flow name session thread)))
           "repair" (let [[flow & rest] xs]
                      (when-not flow (parse-error "the following arguments are required: flow"))
                      (unknown-flags! rest #{"--pending-id" "--session" "--pane-id" "--terminal-id" "--name" "--agent"})

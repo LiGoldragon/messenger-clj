@@ -16,7 +16,7 @@
 (def thread-pattern #"[A-Za-z0-9-]{16,96}")
 (def digest-pattern #"[0-9a-f]{64}")
 (def reasons #{"NotRegistered" "NeedsBinding" "InTransition" "RouteHold"
-               "IdentityChanged" "PaneMissing" "NotReady" "Blocked"
+               "IdentityChanged" "PaneMissing" "Blocked"
                "ProcessMismatch" "Stalled" "Uncertain" "RelayOverflow"
                "Submitting" "sent"})
 (def grades #{"Transported" "Presented" "Fallback-Presented" "Held" "Uncertain"})
@@ -64,19 +64,10 @@
     (json/parse-string (String. bytes java.nio.charset.StandardCharsets/UTF_8) true)
     (catch Exception _ (fail! "Malformed JSON" path))))
 
-(defn readiness! [value path]
-  (exact-map! value #{:thread_id :rollout :marker} #{:evidence_kind} "readiness proof" path)
-  (let [result {:thread_id (thread! (:thread_id value) path)
-                :rollout (string! (:rollout value) "readiness rollout" path)
-                :marker (string! (:marker value) "readiness marker" path)}]
-    (cond-> result
-      (contains? value :evidence_kind)
-      (assoc :evidence_kind (string! (:evidence_kind value) "readiness evidence kind" path)))))
-
 (defn route! [flow value path]
   (flow! flow path)
   (exact-map! value #{:session :name :pane_id :terminal_id :agent}
-              #{:native_thread :readiness_proof :route_hold :transition :state}
+              #{:native_thread :route_hold :transition :state}
               "route" path)
   (let [route {:session (string! (:session value) "route session" path)
                :name (string! (:name value) "route name" path)
@@ -86,15 +77,11 @@
     (store/route!
      (let [result (cond-> route
                     (contains? value :native_thread) (assoc :native_thread (thread! (:native_thread value) path))
-                    (contains? value :readiness_proof) (assoc :readiness_proof (readiness! (:readiness_proof value) path))
                     (contains? value :route_hold) (assoc :route_hold (string! (:route_hold value) "route hold" path))
                     (contains? value :transition) (assoc :transition (if (boolean? (:transition value))
                                                                        (:transition value)
                                                                        (fail! "Route transition must be boolean" path)))
                     (contains? value :state) (assoc :state (string! (:state value) "route state" path)))]
-       (when (and (:readiness_proof result)
-                  (not= (:native_thread result) (get-in result [:readiness_proof :thread_id])))
-         (fail! "Readiness proof conflicts with route native thread" path))
        result))))
 
 (defn binding! [value path]

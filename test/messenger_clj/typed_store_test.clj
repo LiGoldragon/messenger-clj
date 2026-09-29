@@ -6,9 +6,7 @@
 (def flow "00f95a")
 (def route
   {:session "s" :name "Mind Sol 00f95a" :pane_id "p" :terminal_id "t"
-   :agent "codex" :native_thread "00000000-0000-0000-0000-000000000000"
-   :readiness_proof {:thread_id "00000000-0000-0000-0000-000000000000"
-                     :rollout "/tmp/rollout" :marker "HM_READY_12345678"}})
+   :agent "codex" :native_thread "00000000-0000-0000-0000-000000000000"})
 (def attempt
   {:id "attempt-1" :flow flow :at "2026-09-25T00:00:00Z"
    :grade :Held :reason :NotRegistered
@@ -32,7 +30,7 @@
       (typed/put-route! root flow route)
       (is (= (typed/route! route) (typed/route-for root flow)))
       (is (= {flow (typed/route! route)} (typed/routes root)))
-      (let [unbound (dissoc route :native_thread :readiness_proof)]
+      (let [unbound (dissoc route :native_thread)]
         (typed/put-route! root flow unbound)
         (is (= "NeedsBinding" (:state (typed/route-for root flow)))
             "an absent native thread remains absent and unroutable"))

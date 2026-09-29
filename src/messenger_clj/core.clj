@@ -12,14 +12,13 @@
             [malli.core :as m]))
 
 (def skill-note "Documented by the authored messaging skills in Curriculum. Update those sources with any change to this tool.")
-(def failure-reasons #{:NotRegistered :NeedsBinding :InTransition :RouteHold :IdentityChanged :PaneMissing :NotReady :Blocked :ProcessMismatch :Stalled :Uncertain :RelayOverflow :Submitting :RepairCandidate :RepairRequired :RouteRepaired :InvalidBinding :sent})
+(def failure-reasons #{:NotRegistered :NeedsBinding :InTransition :RouteHold :IdentityChanged :PaneMissing :Blocked :ProcessMismatch :Stalled :Uncertain :RelayOverflow :Submitting :RepairCandidate :RepairRequired :RouteRepaired :InvalidBinding :sent})
 (def delivery-grades #{:Transported :Presented :Fallback-Presented :Repaired :Held :Uncertain})
 (def FlowId [:and [:string {:min 1 :max 96}] [:re #"^[A-Za-z0-9][A-Za-z0-9_-]*$"]])
 (def NativeThread [:and [:string {:min 16 :max 96}] [:re #"^[A-Za-z0-9][A-Za-z0-9-]+$"]])
 (def MessageBody [:string {:min 1}])
 (def MessageVariant [:enum :msg :psyche :psyches])
-(def ReadinessProof [:map {:closed true} [:thread_id NativeThread] [:rollout :string] [:marker :string] [:evidence_kind {:optional true} :string]])
-(def RouteBinding [:map {:closed true} [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string] [:agent :string] [:native_thread {:optional true} NativeThread] [:readiness_proof {:optional true} ReadinessProof] [:route_hold {:optional true} :string] [:transition {:optional true} :boolean] [:state {:optional true} :string]])
+(def RouteBinding [:map {:closed true} [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string] [:agent :string] [:native_thread {:optional true} NativeThread] [:route_hold {:optional true} :string] [:transition {:optional true} :boolean] [:state {:optional true} :string]])
 (def DeliveryAttempt [:map {:closed true} [:id :string] [:at :string] [:flow FlowId] [:reason :keyword] [:grade {:optional true} :keyword] [:variant {:optional true} MessageVariant] [:context {:optional true} [:maybe MessageBody]] [:body {:optional true} MessageBody] [:part_index {:optional true} pos-int?] [:part_count {:optional true} pos-int?] [:submitted {:optional true} :string] [:binding {:optional true} RouteBinding]])
 (def PendingIntent [:map {:closed true} [:attempt DeliveryAttempt] [:message MessageBody] [:variant {:optional true} MessageVariant] [:context {:optional true} [:maybe MessageBody]] [:part_index {:optional true} pos-int?] [:part_count {:optional true} pos-int?] [:state [:= "held"]]])
 (def RouteIdentity [:map {:closed true} [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string] [:agent :string]])
@@ -31,7 +30,7 @@
 (def PsychesMessage [:vector {:min 1} PsycheMessage])
 (def PsychesInput [:vector {:min 1} [:tuple MessageBody MessageBody]])
 (def MessageRequest [:map {:closed true} [:variant MessageVariant] [:body MessageBody] [:context {:optional true} [:maybe MessageBody]]])
-(doseq [schema [FlowId NativeThread MessageBody MessageVariant ReadinessProof RouteBinding DeliveryAttempt PendingIntent RetirementMarker Reservation PaneMessage PsycheMessage PsychesMessage PsychesInput MessageRequest]] (m/validator schema))
+(doseq [schema [FlowId NativeThread MessageBody MessageVariant RouteBinding DeliveryAttempt PendingIntent RetirementMarker Reservation PaneMessage PsycheMessage PsychesMessage PsychesInput MessageRequest]] (m/validator schema))
 
 (defn fail [s] (throw (ex-info s {:hm/failure true})))
 (defn valid! [schema value label]
@@ -105,7 +104,6 @@
 (def ^:dynamic *clock* nil)
 (def ^:dynamic *transport* nil)
 (def ^:dynamic *shell* shell)
-(def ^:dynamic *readiness-attempts* 80)
 (def ^:dynamic *reservation-wait-ms* 15000)
 (def ^:dynamic *reservation-retry-ms* 50)
 ;; A test seam around the Orchestrate boundary.  Production always uses
@@ -314,58 +312,6 @@
     (string? content) content
     (sequential? content) (str/join "" (keep #(when (map? %) (:text %)) content))
     :else ""))
-(defn readiness-witness [rows marker native-thread rollout]
-  (let [user-index (first (keep-indexed (fn [index row]
-                                          (let [payload (:payload row) item (:item payload)]
-                                            (when (and (= "event_msg" (:type row))
-                                                       (= native-thread (:thread_id payload))
-                                                       (= "UserMessage" (:type item))
-                                                       (str/includes? (content-text (:content item)) marker))
-                                              index))) rows))]
-    (when user-index
-      (some (fn [row]
-              (let [payload (:payload row) item (:item payload)]
-                (when (and (= native-thread (:thread_id payload))
-                           (= "AgentMessage" (:type item))
-                           (= marker (str/trim (content-text (:content item)))))
-                  {:thread_id native-thread :rollout (str (fs/absolutize rollout)) :marker marker})))
-            (drop (inc user-index) rows)))))
-(defn claude-readiness-witness [rows marker native-thread rollout]
-  (let [session-id #(or (:sessionId %) (:session_id %))
-        user-index (first (keep-indexed (fn [index row]
-                                          (when (and (= "user" (:type row))
-                                                     (= native-thread (session-id row))
-                                                     (str/includes? (content-text (get-in row [:message :content])) marker))
-                                            index)) rows))]
-    (when user-index
-      (some (fn [row]
-              (when (and (= "assistant" (:type row))
-                         (= native-thread (session-id row))
-                         (= marker (str/trim (content-text (get-in row [:message :content])))))
-                {:thread_id native-thread :rollout (str (fs/absolutize rollout)) :marker marker
-                 :evidence_kind "claude-transcript"}))
-            (drop (inc user-index) rows)))))
-(defn readiness-probe! [agent marker native-thread rollout]
-  (when-not (and (string? marker) (re-matches #"HM_READY_[A-Za-z0-9_-]{8,96}" marker))
-    (fail "Readiness probe marker must be a unique HM_READY token"))
-  (native-thread! native-thread)
-  (try
-    (prompt!* (transport) agent (str "Reply exactly " marker " to confirm this explicit HM readiness probe.") false)
-    (catch Exception error
-      ;; Herdr can report this after injecting into a resumed Codex pane.  Only
-      ;; the exact native transcript witness below can turn it into readiness.
-      (when-not (str/includes? (or (.getMessage error) "") "agent_prompt_stalled")
-        (throw error))))
-  (when-not rollout (fail "Readiness probe requires a native Codex rollout or Claude transcript"))
-  (loop [remaining *readiness-attempts*]
-    (let [rows (try (mapv #(json/parse-string % true)
-                          (remove str/blank? (str/split-lines (slurp (str rollout)))))
-                    (catch Exception _ (fail "Readiness probe rollout is unavailable or invalid")))]
-      (or (readiness-witness rows marker native-thread rollout)
-          (claude-readiness-witness rows marker native-thread rollout)
-          (if (pos? (dec remaining))
-            (do (Thread/sleep 100) (recur (dec remaining)))
-            (fail "Readiness probe marker was not observed in an exact native assistant reply"))))))
 (defn verify-target! [route]
   (let [reply (target-agent* (transport) route)
         agent (or (:agent reply) reply)]
@@ -376,9 +322,6 @@
       (fail "IdentityChanged"))
     (nonempty-strings! "Live Herdr agent has no current name or agent kind"
                        [(:name agent) (:agent agent)])
-    (when (and (not (:interactive_ready agent))
-               (not= (:native_thread route) (get-in route [:readiness_proof :thread_id])))
-      (fail "NotReady"))
     (when (= "blocked" (:agent_status agent)) (fail "Blocked"))
     (when-not (contains? #{"idle" "working" "done"} (:agent_status agent)) (fail "Uncertain"))
     (process-matches! route)
@@ -404,16 +347,6 @@
      (select-keys right stable-route-keys)))
 (defn refresh-route-snapshot [route agent]
   (route-binding! (assoc route :name (:name agent) :agent (:agent agent))))
-(defn pending-readiness? [route] (= "PendingReadiness" (:state route)))
-(defn ready-route [route live]
-  (route-binding! (cond-> (refresh-route-snapshot route live)
-                    (pending-readiness? route) (dissoc :state))))
-(defn promote-ready-route! [flow route live]
-  (let [pending? (pending-readiness? route)
-        route (ready-route route live)]
-    (when pending?
-      (save-route! (registry) flow route))
-    route))
 (defn exact-live-agent [route]
   (let [hits (filter #(same-stable-route? route %) (live-agents))]
     (when-not (= 1 (count hits))
@@ -572,7 +505,7 @@
         (fail "Pending ledger index did not confirm persistence")))
     (throw (ex-info (str "Held.{ " flow " " (name reason) " attempt-" (subs (:id attempt) 0 12) " }")
                     {:hm/failure true :hm/held true :hm/attempt-id (:id attempt)}))))
-(defn register! [flow name session native-thread readiness-marker rollout]
+(defn register! [flow name session native-thread]
   (flow-id! flow)
   (with-reservation flow
     (fn []
@@ -598,13 +531,10 @@
                 native-thread (registration-native-thread! a native-thread (:native_thread existing))
                 _ (assert-native-not-retired! native-thread flow)
                 _ (nonempty-strings! "Herdr registration has no agent kind" [(:agent a)])
-                proof (when-not (:interactive_ready a)
-                        (when readiness-marker
-                          (readiness-probe! a readiness-marker native-thread rollout)))
-                route (valid! RouteBinding (cond-> (assoc (select-keys a [:session :name :pane_id :terminal_id :agent]) :native_thread native-thread)
-                                             proof (assoc :readiness_proof proof)
-                                             (and (not (:interactive_ready a)) (not proof))
-                                             (assoc :state "PendingReadiness")) "RouteBinding")]
+                route (valid! RouteBinding
+                                    (assoc (select-keys a [:session :name :pane_id :terminal_id :agent])
+                                           :native_thread native-thread)
+                                    "RouteBinding")]
             (when (and existing (not (same-stable-route? existing route)))
               (fail "Flow is already registered to a different live route identity"))
             (when (some #(and (not= flow (key %)) (same-stable-route? route (val %)))
@@ -634,11 +564,6 @@
                       "Repair candidate is ambiguous")))
           (let [route (or (checked-repair-candidate (first hits))
                           (fail "Repair candidate identity or official agent_session changed"))
-                route (cond-> route
-                        (and (:readiness_proof existing)
-                             (= (:native_thread route)
-                                (get-in existing [:readiness_proof :thread_id])))
-                        (assoc :readiness_proof (:readiness_proof existing)))
                 _ (assert-native-not-retired! (:native_thread route) flow)
                 _ (when (some #(and (not= flow (key %)) (same-stable-route? route (val %)))
                               (route-records))
@@ -857,7 +782,7 @@
           (when (in-transition? route) (held! flow :InTransition request route))
           (when (:route_hold route) (held! flow :RouteHold request route))
           (let [live (try (verify-target! route) (catch Exception error (held! flow (held-reason error) request route)))
-                route (promote-ready-route! flow route live)
+                route (refresh-route-snapshot route live)
                 keys (get abrupt-keys (:agent route))]
             (when-not keys (fail (str "Hard-abrupt is not supported for " (:agent route) "; nothing sent")))
             (let [envelope (message-envelope sender request)
@@ -920,10 +845,10 @@
                  live (try (verify-target! route)
                            (catch Exception error
                              (let [reason (held-reason error)]
-                               (if (contains? #{:NotReady :Blocked :Uncertain} reason)
+                               (if (contains? #{:Blocked :Uncertain} reason)
                                  (held! flow reason request route)
                                  (hold-repair-required! flow raw-stored pane request)))))
-                 route (promote-ready-route! flow route live)
+                 route (refresh-route-snapshot route live)
                  envelope (message-envelope sender request)
                  _ (try (prompt-request! route envelope wait-presented)
                         (catch Exception error

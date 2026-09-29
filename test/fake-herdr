@@ -11,7 +11,7 @@ case "$*" in
     printf '%s\n' '{"sessions":[{"name":"s","running":true}]}' ;;
   "--session s agent list")
     if [[ "${FAKE_HERDR_AGENT_LIST:-live}" == empty ]]; then printf '%s\n' '{"agents":[]}'; else
-      printf '{"agents":[{"name":"Mind Sol 00f95a","pane_id":"%s","terminal_id":"t","agent":"codex","agent_session":{"source":"herdr:codex","kind":"id","agent":"codex","value":"00000000-0000-0000-0000-000000000000"},"interactive_ready":true,"agent_status":"working"}]}\n' "$pane"
+      printf '{"agents":[{"name":"Mind Sol 00f95a","pane_id":"%s","terminal_id":"t","agent":"codex","agent_session":{"source":"herdr:codex","kind":"id","agent":"codex","value":"00000000-0000-0000-0000-000000000000"},"agent_status":"working"}]}\n' "$pane"
     fi ;;
   "--session s agent get "*)
     case "${FAKE_HERDR_AGENT_SESSION:-valid}" in
@@ -19,7 +19,7 @@ case "$*" in
       absent) session='' ;;
       malformed) session=',"agent_session":{"source":"herdr:claude","kind":"id","agent":"codex","value":"--dangerously-skip-permissions"}' ;;
     esac
-    printf '{"agent":{"name":"Mind Sol 00f95a","pane_id":"%s","terminal_id":"t","agent":"codex"%s,"interactive_ready":true,"agent_status":"working"}}\n' "$pane" "$session" ;;
+    printf '{"agent":{"name":"Mind Sol 00f95a","pane_id":"%s","terminal_id":"t","agent":"codex"%s,"agent_status":"working"}}\n' "$pane" "$session" ;;
   "--session s pane process-info --pane "*)
     printf '%s\n' '{"process_info":{"foreground_processes":[{"pid":123,"argv":["codex","--dangerously-skip-permissions","--thread","00000000-0000-0000-0000-000000000000"]}]}}' ;;
   "--session s pane get "*)
