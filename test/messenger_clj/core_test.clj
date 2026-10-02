@@ -782,6 +782,21 @@
         (is (thrown? Exception (hm/move! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) 123 "w2")))
         (is (= "p" @moves))))))
 
+(deftest retirement-refuses-another-native-thread-without-changing-route
+  (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-native-"}))
+        evidence (str (fs/path root-path "evidence"))]
+    (try
+      (spit evidence "exact-seat witness")
+      (binding [hm/*root* root-path hm/*with-reservation* pass-reservation]
+        (persist-route! root-path route)
+        (is (thrown-with-msg? Exception #"native thread"
+              (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex"
+                          "11111111-1111-1111-1111-111111111111"
+                          evidence (hm/sha256 evidence) false)))
+        (is (= route (store/stored-route-for root-path "00f95a")))
+        (is (nil? (store/retirement-for root-path "00f95a"))))
+      (finally (fs/delete-tree root-path)))))
+
 (deftest retirement-is-evidence-bound-idempotent-and-blocks-reuse
   (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-"}))
         evidence (fs/create-temp-file {:prefix "hm-evidence-"})]
