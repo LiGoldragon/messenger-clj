@@ -642,9 +642,12 @@
             (fail (str "Flow " flow " already has a different retirement marker")))
           (do
             (if-let [route (store/stored-route-for (root) flow)]
-              (when-not (= (dissoc expected :name)
-                           (select-keys route [:session :pane_id :terminal_id :agent]))
-                (fail "Registration differs from the explicitly revalidated retirement route"))
+              (do
+                (when-not (= (dissoc expected :name)
+                             (select-keys route [:session :pane_id :terminal_id :agent]))
+                  (fail "Registration differs from the explicitly revalidated retirement route"))
+                (when-not (= native-thread (:native_thread route))
+                  (fail "Registration differs from the explicitly revalidated retirement native thread")))
               (when-not allow-absent?
                 (fail "No current registration; use import-retirement only with retained exact evidence")))
             (store/put-retirement!
