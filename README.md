@@ -112,10 +112,10 @@ nix flake check
 (`check.nix`), and runs the Clojure test suite below as the `clj-tests` check,
 with the pinned pod and a stub `orchestrate`.
 
-The managed Home activation exposes that package through
-`~/.local/libexec/messenger-clj`; the old
-`~/.local/libexec/hacky-messenger-clojure` installation is removed after the
-launcher cutover succeeds.
+Home manages `~/.local/bin/messenger-clj` and the `hm-*` command links from
+the immutable package. Its activation admits only exact legacy or known
+predecessor command bindings before replacement. The old
+`~/.local/libexec/messenger-clj` package pointer is not the command provider.
 
 ## State continuity
 
