@@ -793,7 +793,7 @@
               (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex"
                           "11111111-1111-1111-1111-111111111111"
                           evidence (hm/sha256 evidence) false)))
-        (is (= route (store/stored-route-for root-path "00f95a")))
+        (is (= (assoc route :state "Bound") (store/stored-route-for root-path "00f95a")))
         (is (nil? (store/retirement-for root-path "00f95a"))))
       (finally (fs/delete-tree root-path)))))
 
