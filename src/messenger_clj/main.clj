@@ -6,6 +6,7 @@
                     "  messenger-clj send TARGET --stdin [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --psyche CONTEXT (VERBATIM|--stdin) [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --psyches --stdin [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
+                    "  messenger-clj retire FLOW\n"
                     hm/skill-note))
 (defn arg [xs option] (second (drop-while #(not= option %) xs)))
 (defn parse-error [message] (throw (ex-info message {:hm/parse true})))
@@ -141,15 +142,19 @@
                      (let [pid (or (try (parse-long pid-text) (catch Exception _ nil))
                                    (parse-error "argument --process-pid: invalid int value"))]
                        (println (hm/move! flow session pane-id terminal-id name agent native-thread pid workspace)))))
-          ("retire" "import-retirement") (let [[flow & rest] xs]
-                                           (when-not flow (parse-error "the following arguments are required: flow"))
-                                           (unknown-flags! rest #{"--session" "--pane-id" "--terminal-id" "--name" "--agent" "--native-thread" "--evidence" "--evidence-sha256"})
-                                           (extra-values! rest #{"--session" "--pane-id" "--terminal-id" "--name" "--agent" "--native-thread" "--evidence" "--evidence-sha256"})
-                                           (let [session (arg rest "--session") pane-id (arg rest "--pane-id") terminal-id (arg rest "--terminal-id") name (arg rest "--name")
-                                                 agent (arg rest "--agent") native-thread (arg rest "--native-thread") evidence (arg rest "--evidence") digest (arg rest "--evidence-sha256")]
-                                             (when-not (every? some? [session pane-id terminal-id name agent native-thread evidence digest])
-                                               (parse-error "the following arguments are required: --session, --pane-id, --terminal-id, --name, --agent, --native-thread, --evidence, --evidence-sha256"))
-                                             (println (hm/retire! flow session pane-id terminal-id name agent native-thread evidence digest (= op "import-retirement")))))
+          "retire" (let [[flow & rest] xs]
+                     (when-not flow (parse-error "the following arguments are required: flow"))
+                     (when (seq rest) (parse-error (str "unrecognized arguments: " (first rest) "; retire takes only the flow id")))
+                     (println (hm/retire! flow)))
+          "import-retirement" (let [[flow & rest] xs]
+                                (when-not flow (parse-error "the following arguments are required: flow"))
+                                (unknown-flags! rest #{"--session" "--pane-id" "--terminal-id" "--name" "--agent" "--native-thread" "--evidence" "--evidence-sha256"})
+                                (extra-values! rest #{"--session" "--pane-id" "--terminal-id" "--name" "--agent" "--native-thread" "--evidence" "--evidence-sha256"})
+                                (let [session (arg rest "--session") pane-id (arg rest "--pane-id") terminal-id (arg rest "--terminal-id") name (arg rest "--name")
+                                      agent (arg rest "--agent") native-thread (arg rest "--native-thread") evidence (arg rest "--evidence") digest (arg rest "--evidence-sha256")]
+                                  (when-not (every? some? [session pane-id terminal-id name agent native-thread evidence digest])
+                                    (parse-error "the following arguments are required: --session, --pane-id, --terminal-id, --name, --agent, --native-thread, --evidence, --evidence-sha256"))
+                                  (println (hm/import-retirement! flow session pane-id terminal-id name agent native-thread evidence digest))))
           "import-json" (let [[source & rest] xs]
                           (when-not source (parse-error "the following arguments are required: source"))
                           (unknown-flags! rest #{"--target" "--receipt" "--apply"})

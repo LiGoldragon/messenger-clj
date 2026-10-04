@@ -627,7 +627,10 @@
     (let [actual (sha256 path)]
       (when-not (= evidence-sha256 actual) (fail "Retirement evidence SHA-256 does not match; nothing changed"))
       {:path (str path) :sha256 actual})))
-(defn retire! [flow session pane-id terminal-id name agent native-thread evidence-path evidence-sha256 allow-absent?]
+(defn import-retirement!
+  "Record a retirement from separately retained exact evidence.  The flow's
+  route may already be absent; a present route must match exactly."
+  [flow session pane-id terminal-id name agent native-thread evidence-path evidence-sha256]
   (flow-id! flow)
   (nonempty-strings! "Retirement requires every exact route identity field" [session pane-id terminal-id name agent])
   (native-thread! native-thread)
@@ -641,15 +644,12 @@
             (str "Already retired " flow ": marker retained")
             (fail (str "Flow " flow " already has a different retirement marker")))
           (do
-            (if-let [route (store/stored-route-for (root) flow)]
-              (do
-                (when-not (= (dissoc expected :name)
-                             (select-keys route [:session :pane_id :terminal_id :agent]))
-                  (fail "Registration differs from the explicitly revalidated retirement route"))
-                (when-not (= native-thread (:native_thread route))
-                  (fail "Registration differs from the explicitly revalidated retirement native thread")))
-              (when-not allow-absent?
-                (fail "No current registration; use import-retirement only with retained exact evidence")))
+            (when-let [route (store/stored-route-for (root) flow)]
+              (when-not (= (dissoc expected :name)
+                           (select-keys route [:session :pane_id :terminal_id :agent]))
+                (fail "Registration differs from the explicitly revalidated retirement route"))
+              (when-not (= native-thread (:native_thread route))
+                (fail "Registration differs from the explicitly revalidated retirement native thread")))
             (store/put-retirement!
              (root)
              (valid! RetirementMarker
@@ -660,6 +660,72 @@
                      "RetirementMarker"))
             (store/remove-route! (root) flow)
             (str "Retired " flow ": delivery is blocked before Herdr routing")))))))
+(def retire-refusals #{:UnknownFlow :AlreadyRetired :PaneNotFound :PaneAmbiguous :IdentityChanged :NativeMismatch :NoNativeIdentity :RouteHold})
+(defn retire-refused [flow reason detail]
+  (when-not (contains? retire-refusals reason) (fail (str "Unknown retirement refusal " reason)))
+  (throw (ex-info (str "RetireRefused.{ " flow " " (name reason) " } " detail)
+                  {:hm/failure true :hm/retire-refusal reason})))
+(defn retirement-evidence-path [flow at]
+  (fs/path (root) "retirement-evidence"
+           (str flow "-" (str/replace at #"[^0-9A-Za-z]" "") ".json")))
+(defn write-retirement-evidence! [flow evidence]
+  ;; Evidence is written before the marker.  A failure here changes nothing.
+  (let [path (fs/absolutize (retirement-evidence-path flow (:retired_at evidence)))]
+    (when (fs/exists? path) (fail (str "Retirement evidence already exists at " path "; nothing changed")))
+    (fs/create-dirs (fs/parent path))
+    (spit (str path) (str (json/generate-string evidence {:pretty true}) "\n"))
+    {:path (str path) :sha256 (sha256 path)}))
+(defn retire!
+  "Retire FLOW from what the typed registry and live Herdr already know.
+  Refuses, typed, an unknown flow, an already retired flow, a route under
+  repair hold, and a registered pane that Herdr no longer shows exactly."
+  [flow]
+  (flow-id! flow)
+  (with-reservation flow
+    (fn []
+      (when-let [existing (store/retirement-for (root) flow)]
+        (retire-refused flow :AlreadyRetired (str "by " (get-in existing [:evidence :path]))))
+      (let [route (or (store/stored-route-for (root) flow)
+                      (retire-refused flow :UnknownFlow "the messenger has no registration for it"))
+            where (str (:session route) "/" (:pane_id route) "/" (:terminal_id route))
+            _ (when (:route_hold route)
+                (retire-refused flow :RouteHold (str (:route_hold route) " at " where)))
+            hits (filter #(same-stable-route? route %) (live-agents))
+            _ (case (count hits)
+                0 (retire-refused flow :PaneNotFound (str "Herdr shows no live agent at " where))
+                1 nil
+                (retire-refused flow :PaneAmbiguous (str "Herdr shows " (count hits) " live agents at " where)))
+            listed (first hits)
+            reply (target-agent* (transport) listed)
+            live (assoc (or (:agent reply) reply) :session (:session listed))
+            _ (when-not (and (same-stable-route? route live) (= (:agent route) (:agent live)))
+                (retire-refused flow :IdentityChanged
+                                (str "live " (pr-str (select-keys live exact-agent-keys))
+                                     " differs from registered " (pr-str (select-keys route exact-agent-keys)))))
+            _ (when-not (or (:agent_session live) (:native_thread route))
+                (retire-refused flow :NoNativeIdentity "neither the registration nor Herdr names a native thread"))
+            native (try (registration-native-thread! live (:native_thread route) nil)
+                        (catch clojure.lang.ExceptionInfo error
+                          (retire-refused flow :NativeMismatch (.getMessage error))))
+            record (valid! RouteIdentity (select-keys (assoc route :name (or (:name live) (:name route)))
+                                                      exact-agent-keys)
+                           "RouteIdentity")
+            retired-by (or *flow-id* (System/getenv "FLOW_ID") "")
+            at (now)
+            evidence (write-retirement-evidence!
+                      flow {:version 1 :flow flow :retired_by retired-by :retired_at at
+                            :native_thread native :registered_route route :live_agent live})]
+        (store/put-retirement!
+         (root)
+         (valid! RetirementMarker
+                 {:version 1 :state "retired" :flow flow :record record
+                  :native_thread native :evidence evidence
+                  :retired_by retired-by :retired_at at}
+                 "RetirementMarker"))
+        (store/remove-route! (root) flow)
+        (str "Retired " flow ": delivery is blocked before Herdr routing\n"
+             "evidence " (:path evidence) "\n"
+             "sha256 " (:sha256 evidence))))))
 (defn rebind! [flow old-name new-name session pane-id terminal-id agent native-thread]
   (flow-id! flow)
   (nonempty-strings! "Rebind requires every exact old route identity field" [old-name session pane-id terminal-id agent])

@@ -782,7 +782,104 @@
         (is (thrown? Exception (hm/move! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) 123 "w2")))
         (is (= "p" @moves))))))
 
-(deftest retirement-refuses-another-native-thread-without-changing-route
+(def other-route {:session "s" :name "Mind Luna 6f51ad" :pane_id "q" :terminal_id "u"
+                  :agent "claude" :native_thread "22222222-2222-2222-2222-222222222222"})
+
+(defn fixture-registry!
+  "A temporary typed registry holding two registered flows."
+  [prefix]
+  (let [root-path (str (fs/create-temp-dir {:prefix prefix}))]
+    (store/put-route! root-path "00f95a" route)
+    (store/put-route! root-path "6f51ad" other-route)
+    root-path))
+
+(defn retire-transport [live-agents & {:keys [native]}]
+  (reify hm/HerdrTransport
+    (live-agents* [_] live-agents)
+    (target-agent* [_ requested]
+      (let [agent (first (filter #(hm/same-stable-route? requested %) live-agents))]
+        {:agent (assoc (dissoc agent :native_thread)
+                       :agent_status "idle"
+                       :agent_session {:source (str "herdr:" (:agent agent)) :kind "id"
+                                       :agent (:agent agent)
+                                       :value (or native (:native_thread agent))})}))
+    (process-info* [_ _] (throw (ex-info "unexpected process-info" {})))
+    (pane* [_ _] (throw (ex-info "unexpected pane" {})))
+    (move-pane* [_ _ _ _] (throw (ex-info "unexpected move" {})))
+    (send-keys* [_ _ _] (throw (ex-info "unexpected keys" {})))
+    (prompt!* [_ _ _ _] (throw (ex-info "retire must never prompt" {})))))
+
+(defn retire-refusal [flow]
+  (try (hm/retire! flow) nil
+       (catch clojure.lang.ExceptionInfo error
+         [(:hm/retire-refusal (ex-data error)) (.getMessage error)])))
+
+(defn evidence-files [root-path] (vec (fs/glob root-path "retirement-evidence/*")))
+
+(deftest retire-takes-only-the-flow-and-writes-its-own-evidence
+  (let [root-path (fixture-registry! "hm-retire-one-")]
+    (try
+      (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation
+                hm/*clock* (reify hm/Clock (current-time [_] "2026-10-03T12:00:00Z"))
+                hm/*transport* (retire-transport [(assoc route :name "Mind Sol renamed 00f95a") other-route])]
+        (let [output (hm/retire! "00f95a")
+              marker (store/retirement-for root-path "00f95a")
+              path (get-in marker [:evidence :path])
+              written (json/parse-string (slurp path) true)]
+          (is (str/starts-with? output "Retired 00f95a: delivery is blocked before Herdr routing"))
+          (is (str/includes? output (str "evidence " path)))
+          (is (str/includes? output (str "sha256 " (hm/sha256 path))))
+          (is (= (str (fs/path root-path "retirement-evidence" "00f95a-20261003T120000Z.json")) path))
+          (is (= (hm/sha256 path) (get-in marker [:evidence :sha256])))
+          (is (= {:session "s" :name "Mind Sol renamed 00f95a" :pane_id "p" :terminal_id "t" :agent "codex"}
+                 (:record marker)))
+          (is (= (:native_thread route) (:native_thread marker)))
+          (is (= "sender" (:retired_by marker) (:retired_by written)))
+          (is (= "00f95a" (:flow written)))
+          (is (= (assoc route :state "Bound") (:registered_route written)))
+          (is (= "p" (get-in written [:live_agent :pane_id])))
+          (is (nil? (store/stored-route-for root-path "00f95a")))
+          (is (= (assoc other-route :state "Bound") (store/stored-route-for root-path "6f51ad"))
+              "the other fixture flow keeps its route")
+          (is (thrown-with-msg? Exception #"Retired: 00f95a" (hm/assert-not-retired! "00f95a")))
+          (is (thrown? Exception (hm/assert-native-not-retired! (:native_thread route) "6f51ad")))
+          (let [[reason message] (retire-refusal "00f95a")]
+            (is (= :AlreadyRetired reason))
+            (is (str/starts-with? message "RetireRefused.{ 00f95a AlreadyRetired } by "))
+            (is (str/includes? message path)))
+          (is (= 1 (count (evidence-files root-path))) "a refused retire writes no evidence")))
+      (finally (fs/delete-tree root-path)))))
+
+(deftest retire-refusals-are-typed-and-change-nothing
+  (let [root-path (fixture-registry! "hm-retire-refuse-")]
+    (try
+      (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation]
+        (binding [hm/*transport* (retire-transport [route other-route])]
+          (is (= :UnknownFlow (first (retire-refusal "abcdef"))))
+          (is (str/starts-with? (second (retire-refusal "abcdef")) "RetireRefused.{ abcdef UnknownFlow }")))
+        (binding [hm/*transport* (retire-transport [other-route])]
+          (let [[reason message] (retire-refusal "00f95a")]
+            (is (= :PaneNotFound reason))
+            (is (= "RetireRefused.{ 00f95a PaneNotFound } Herdr shows no live agent at s/p/t" message))))
+        (binding [hm/*transport* (retire-transport [(assoc route :terminal_id "recycled") other-route])]
+          (is (= :PaneNotFound (first (retire-refusal "00f95a"))) "a recycled pane is not the registered one"))
+        (binding [hm/*transport* (retire-transport [route (assoc route :name "twin") other-route])]
+          (is (= :PaneAmbiguous (first (retire-refusal "00f95a")))))
+        (binding [hm/*transport* (retire-transport [(assoc route :agent "claude") other-route])]
+          (is (= :IdentityChanged (first (retire-refusal "00f95a")))))
+        (binding [hm/*transport* (retire-transport [route other-route]
+                                                   :native "11111111-1111-1111-1111-111111111111")]
+          (is (= :NativeMismatch (first (retire-refusal "00f95a")))))
+        (store/put-route! root-path "6f51ad" (assoc other-route :route_hold "pane_move_in_progress"))
+        (binding [hm/*transport* (retire-transport [route other-route])]
+          (is (= :RouteHold (first (retire-refusal "6f51ad")))))
+        (is (= (assoc route :state "Bound") (store/stored-route-for root-path "00f95a")))
+        (is (nil? (store/retirement-for root-path "00f95a")))
+        (is (nil? (store/retirement-for root-path "6f51ad")))
+        (is (empty? (evidence-files root-path))))
+      (finally (fs/delete-tree root-path)))))
+
+(deftest import-retirement-refuses-another-native-thread-without-changing-route
   (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-native-"}))
         evidence (str (fs/path root-path "evidence"))]
     (try
@@ -790,14 +887,14 @@
       (binding [hm/*root* root-path hm/*with-reservation* pass-reservation]
         (persist-route! root-path route)
         (is (thrown-with-msg? Exception #"native thread"
-              (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex"
-                          "11111111-1111-1111-1111-111111111111"
-                          evidence (hm/sha256 evidence) false)))
+              (hm/import-retirement! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex"
+                                     "11111111-1111-1111-1111-111111111111"
+                                     evidence (hm/sha256 evidence))))
         (is (= (assoc route :state "Bound") (store/stored-route-for root-path "00f95a")))
         (is (nil? (store/retirement-for root-path "00f95a"))))
       (finally (fs/delete-tree root-path)))))
 
-(deftest retirement-is-evidence-bound-idempotent-and-blocks-reuse
+(deftest import-retirement-is-evidence-bound-idempotent-and-blocks-reuse
   (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-"}))
         evidence (fs/create-temp-file {:prefix "hm-evidence-"})]
     (spit (str evidence) "witness")
@@ -805,25 +902,24 @@
       (persist-route! root-path route)
       (let [digest (hm/sha256 evidence)]
         (is (= "Retired 00f95a: delivery is blocked before Herdr routing"
-               (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest false)))
+               (hm/import-retirement! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest)))
         (is (= "Already retired 00f95a: marker retained"
-               (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest false)))
+               (hm/import-retirement! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest)))
         (is (thrown? Exception (hm/assert-not-retired! "00f95a")))
         (is (thrown? Exception (hm/assert-native-not-retired! (:native_thread route) "other-flow")))
-        (is (thrown? Exception (hm/retire! "00f95a" "s" "other" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest false)))
+        (is (thrown? Exception (hm/import-retirement! "00f95a" "s" "other" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest)))
         (with-redefs [store/retirement-for (fn [_ flow] (when (= flow "broken") {:bad true}))]
           (is (thrown? Exception (hm/assert-not-retired! "broken"))))
         (is (= "Retired imported: delivery is blocked before Herdr routing"
-               (hm/retire! "imported" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest true)))))))
+               (hm/import-retirement! "imported" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence digest)))))))
 
 (deftest another-flows-missing-retirement-evidence-does-not-refuse-this-flow
-  (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-cross-"}))
-        evidence (fs/create-temp-file {:prefix "hm-evidence-"})]
-    (spit (str evidence) "witness")
-    (binding [hm/*root* root-path hm/*with-reservation* pass-reservation]
+  (let [root-path (str (fs/create-temp-dir {:prefix "hm-retire-cross-"}))]
+    (binding [hm/*root* root-path hm/*with-reservation* pass-reservation
+              hm/*transport* (retire-transport [route])]
       (persist-route! root-path route)
-      (hm/retire! "00f95a" "s" "p" "t" "Mind Sol 00f95a" "codex" (:native_thread route) evidence (hm/sha256 evidence) false)
-      (fs/delete evidence)
+      (hm/retire! "00f95a")
+      (fs/delete (get-in (store/retirement-for root-path "00f95a") [:evidence :path]))
       ;; The unrelated Flow's own marker still refuses it, as malformed.
       (is (thrown-with-msg? Exception #"Retirement marker for 00f95a is unavailable or malformed"
                             (hm/assert-not-retired! "00f95a")))

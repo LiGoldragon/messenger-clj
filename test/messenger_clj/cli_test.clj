@@ -131,7 +131,6 @@
         state (str (fs/path root "fake-herdr-pane"))
         config-home (str (fs/create-temp-dir {:prefix "hm-cli-config-"}))
         prompt-server (fake-prompt-server config-home)
-        evidence (fs/create-temp-file {:prefix "hm-cli-evidence-"})
         herdr (fs/path tools "herdr")
         orchestrate (fs/path tools "orchestrate")
         environment {"PATH" (str tools ":" (System/getenv "PATH"))
@@ -147,7 +146,6 @@
             "#!/usr/bin/env bash\ncase \"$1\" in Lock.*) echo 'Locked.{ 1 Test sender [ /tmp ] test }';; Release.*) echo 'Released.{ 1 Test sender [ /tmp ] test }';; esac\n")
       (.setExecutable (java.io.File. (str herdr)) true)
       (.setExecutable (java.io.File. (str orchestrate)) true)
-      (spit (str evidence) "retirement witness")
 
       (let [registered (invoke environment "hm-register" "00f95a" "Mind Sol 00f95a"
                                "--session" "s" "--native-thread" native-thread)]
@@ -240,14 +238,29 @@
       (let [registered (invoke environment "hm-register" "00f95a" "Mind Sol 00f95a"
                                "--session" "s" "--native-thread" native-thread)]
         (is (zero? (:exit registered)) (:err registered)))
-      (let [digest (hm/sha256 evidence)
-            retired (invoke environment "hm-retire" "00f95a"
-                            "--session" "s" "--pane-id" "m" "--terminal-id" "t"
-                            "--name" "Mind Sol 00f95a" "--agent" "codex"
-                            "--native-thread" native-thread
-                            "--evidence" (str evidence) "--evidence-sha256" digest)]
+      (let [extra (invoke environment "hm-retire" "00f95a" "--session" "s")]
+        (is (= 2 (:exit extra)))
+        (is (str/includes? (:err extra) "retire takes only the flow id")))
+      (let [unknown (invoke environment "hm-retire" "abcdef")]
+        (is (= 1 (:exit unknown)))
+        (is (str/includes? (:err unknown) "RetireRefused.{ abcdef UnknownFlow }")))
+      (let [gone (invoke (assoc environment "FAKE_HERDR_AGENT_LIST" "empty") "hm-retire" "00f95a")]
+        (is (= 1 (:exit gone)))
+        (is (str/includes? (:err gone) "RetireRefused.{ 00f95a PaneNotFound }"))
+        (is (some? (store/route-for root "00f95a"))))
+      (let [retired (invoke environment "hm-retire" "00f95a")
+            marker (store/retirement-for root "00f95a")
+            path (get-in marker [:evidence :path])]
         (is (zero? (:exit retired)) (:err retired))
-        (is (= "sender" (:retired_by (store/retirement-for root "00f95a"))))
+        (is (str/includes? (:out retired) (str "evidence " path)))
+        (is (str/starts-with? path (str (fs/path root "retirement-evidence"))))
+        (is (= (hm/sha256 path) (get-in marker [:evidence :sha256])))
+        (is (= {:session "s" :name "Mind Sol 00f95a" :pane_id "m" :terminal_id "t" :agent "codex"} (:record marker)))
+        (is (= native-thread (:native_thread marker)))
+        (is (= "sender" (:retired_by marker)))
+        (let [again (invoke environment "hm-retire" "00f95a")]
+          (is (= 1 (:exit again)))
+          (is (str/includes? (:err again) "RetireRefused.{ 00f95a AlreadyRetired }")))
         (is (nil? (store/route-for root "00f95a")))
         (let [snapshot (invoke environment "hm-heartbeat-state")
               value (json/parse-string (:out snapshot) true)]
@@ -260,5 +273,4 @@
         ((:close! prompt-server))
         (fs/delete-tree root)
         (fs/delete-tree config-home)
-        (fs/delete-tree tools)
-        (fs/delete-if-exists evidence)))))
+        (fs/delete-tree tools)))))

@@ -38,9 +38,14 @@ Herdr state, checks terminal and harness identity, and persists a submitting
 attempt. It then submits one `#msg` EDN envelope. Presentation is reported only
 when the selected Herdr operation supplies that observation.
 
-Registration, rebind, move, deregistration, and retirement require exact route
-identity. Retirement remains evidence bound and blocks later registration or
-delivery to that native thread.
+Registration, rebind, move, and deregistration require exact route identity.
+Retirement takes only the Flow ID: it reads the registered route, requires one
+exact live Herdr agent at that session, pane, and terminal with a matching
+harness and native thread, and writes its own evidence file under the state
+root before recording the marker and removing the route. Its refusals are typed
+`RetireRefused.{ FLOW Reason }` and change nothing. Retirement blocks later
+registration or delivery to that native thread. `import-retirement` keeps the
+explicit identity and evidence form for retained historical evidence.
 
 ## Limits
 

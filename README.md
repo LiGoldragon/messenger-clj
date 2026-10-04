@@ -83,6 +83,13 @@ printf '%s' 'multiline body' | FLOW_ID=<self> bin/messenger-clj send TARGET --st
 printf '%s' '[["context" "whole verbatim"]]' | FLOW_ID=<self> bin/messenger-clj send TARGET --psyches --stdin
 ```
 
+`hm-retire FLOW` retires one registered Flow from the typed route and live
+Herdr state alone. It writes the evidence file under
+`<state root>/retirement-evidence/` and prints its path and SHA-256. It refuses
+with `RetireRefused.{ FLOW Reason }`, where Reason is `UnknownFlow`,
+`AlreadyRetired`, `PaneNotFound`, `PaneAmbiguous`, `IdentityChanged`,
+`NativeMismatch`, `NoNativeIdentity`, or `RouteHold`, and then nothing changes.
+
 `--stdin` reads the complete standard input as the machine body or, with
 `--psyche CONTEXT`, as that record's verbatim. `--psyches --stdin` reads the
 plural EDN payload. This avoids Linux's per-argument size limit for both the
