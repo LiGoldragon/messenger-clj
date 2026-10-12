@@ -585,6 +585,13 @@
               (fail "Live route identity is already registered to another Flow"))
             (save-route! (registry) flow route)
             (str "Registered " flow ": " (:name route) " (" session ")"))))))))
+(defn live-pending-origin! [variant envelope]
+  (let [origins (case variant
+                  :psyche [(first (read-psyche-message envelope))]
+                  :psyches (mapv first (read-psyches-message envelope))
+                  [(first (read-pane-message envelope))])]
+    (when-not (every? #(m/validate Metaflow %) origins)
+      (fail "LegacyPendingOrigin: retained ID-bearing envelope needs explicit sender-qualified reissue; nothing replayed"))))
 (defn repair! [flow pending-id session pane-id terminal-id name agent-kind]
   (flow-id! flow)
   (nonempty-strings! "Repair requires pending ID and every exact candidate identity field"
@@ -626,6 +633,7 @@
                                   {:variant :msg :body body})))
                 _ (when-not (= (select-keys request [:variant :context :body]) parsed)
                     (fail "Repair pending envelope is missing or differs from the held message"))
+                _ (live-pending-origin! (:variant request) envelope)
                 _ (prompt-request! route envelope false)
                 repair-attempt (delivery-attempt!
                                 {:id (str (java.util.UUID/randomUUID)) :at (now) :flow flow

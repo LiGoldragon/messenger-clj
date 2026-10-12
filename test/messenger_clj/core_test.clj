@@ -1006,3 +1006,15 @@
           (is (thrown? Exception (hm/register! "00f95a" (:name route) "s" (:native_thread route) {:aspect "Mind"})))
           (is (thrown? Exception (hm/metadata! (assoc metadata :topic "Core.Secondary"))))))
       (finally (fs/delete-tree root)))))
+
+
+(deftest legacy-pending-origin-is-readable-but-cannot-be-replayed-live
+  (doseq [request [{:variant :msg :body "exact"}
+                   {:variant :psyche :context "context" :body "exact λ\n"}
+                   {:variant :psyches :body (pr-str [["context" "exact λ\n"]])}]]
+    (let [legacy (hm/message-envelope "sender" request)
+          current (hm/message-envelope "Mind Tests Primary" request)]
+      (is (string? legacy))
+      (is (thrown-with-msg? Exception #"LegacyPendingOrigin"
+                           (hm/live-pending-origin! (:variant request) legacy)))
+      (is (nil? (hm/live-pending-origin! (:variant request) current))))))
