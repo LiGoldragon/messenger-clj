@@ -10,6 +10,11 @@
 (def route {:session "s" :name "Mind Sol 00f95a" :pane_id "p" :terminal_id "t"
             :agent "codex" :native_thread "00000000-0000-0000-0000-000000000000"})
 
+(defn seed-sender! [root]
+  (store/put-route! root "sender"
+                    (assoc route :name "registered-sender" :pane_id "sender-pane"
+                           :terminal_id "sender-terminal" :aspect "Mind" :topic "Tests" :layer "Primary")))
+
 (defn pass-reservation [_ f] (f))
 (defn prompted [pane-route]
   {:type "agent_prompted"
@@ -112,6 +117,7 @@
         verbatim (str "first\n" (apply str (repeat 900 "秘密")) "\nlast")]
     (binding [hm/*root* root-path hm/*flow-id* "sender"
               hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
       (with-redefs [hm/live-agents (constantly [])]
         (let [diagnostic (try (hm/send-psyche! "00f95a" "context" verbatim false nil 0)
                               (catch Exception error (.getMessage error)))
@@ -141,6 +147,7 @@
         verbatim (str/join " " (repeat 1500 "λword"))]
     (binding [hm/*root* root-path hm/*flow-id* "sender"
               hm/*with-reservation* pass-reservation hm/*transport* transport]
+      (seed-sender! (hm/root))
       (persist-route! root-path route)
       (let [diagnostic (try (hm/send-psyche! "00f95a" "context" verbatim false nil 0)
                             (catch Exception error (.getMessage error)))
@@ -148,7 +155,7 @@
                              (store/attempts-for root-path "00f95a"))]
         (is (re-find #"Uncertain\.\{ 00f95a" diagnostic))
         (is (= 1 (count @calls)))
-        (is (= ["sender" "context" verbatim]
+        (is (= ["Mind Tests Primary" "context" verbatim]
                (hm/read-psyche-message (first @calls))))
         (is (= #{:Submitting :Uncertain} (set (map :reason attempts))))
         (is (every? #(= (first @calls) (:submitted %)) attempts))
@@ -189,6 +196,7 @@
                                 (send-keys* [_ _ key] (swap! events conj [:key key]) {:ok true})
                                 (prompt!* [_ _ _ wait?] (swap! events conj [:prompt wait?]) reply))]
                 (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation hm/*transport* transport]
+      (seed-sender! (hm/root))
                   (persist-route! root-path record)
                   [(try (hm/send-abrupt! "00f95a" "receipt" true)
                         (catch Exception error (.getMessage error))) @events])))]
@@ -254,6 +262,7 @@
                    (binding [hm/*root* root-path hm/*flow-id* "sender"
                              hm/*transport* transport hm/*reservation-wait-ms* 2000
                              hm/*reservation-retry-ms* 1]
+      (seed-sender! (hm/root))
                      (hm/send! "00f95a" body false nil 0)))]
     (persist-route! root-path route)
     (binding [hm/*shell* fake-shell]
@@ -262,7 +271,7 @@
             second-send (future (send-one "second"))]
         (is (= "Transported.{ 00f95a working }" (deref first-send 3000 ::timeout)))
         (is (= "Transported.{ 00f95a working }" (deref second-send 3000 ::timeout)))))
-    (is (= #{"#msg [\"sender\" \"first\"]" "#msg [\"sender\" \"second\"]"}
+    (is (= #{"#msg [\"Mind Tests Primary\" \"first\"]" "#msg [\"Mind Tests Primary\" \"second\"]"}
            (set @prompts)))
     (is (= 2 (count @prompts)))
     (is (= 2 (count (set @lock-names))))
@@ -283,6 +292,7 @@
     (persist-route! root-path route)
     (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*transport* transport
               hm/*reservation-wait-ms* 0 hm/*reservation-retry-ms* 0]
+      (seed-sender! (hm/root))
       (binding [hm/*shell* (fn [& _]
                             {:exit 1 :out "LockRejected.PathOverlap.{ busy }\n" :err ""})]
         (is (re-find #"Reservation timed out after 0ms"
@@ -295,6 +305,7 @@
   (let [root (str (fs/create-temp-dir {:prefix "hm-held-"}))
         prompted (atom false)]
     (binding [hm/*root* root hm/*flow-id* "sender" hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
       (with-redefs [hm/live-agents (constantly [])
                     hm/verify-target! (fn [_] route)
                     hm/direct-prompt! (fn [& _] (reset! prompted true))]
@@ -312,6 +323,7 @@
         prompted (atom false)]
     (binding [hm/*root* root-path hm/*flow-id* "sender"
               hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
       (persist-route! root-path (dissoc route :native_thread))
       (with-redefs [hm/live-agents (constantly [route])
                     hm/direct-prompt! (fn [& _] (reset! prompted true))]
@@ -338,6 +350,7 @@
         invoke (fn [reply]
                  (let [calls (atom [])]
                    (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
                      (persist-route! root-path route)
                      (with-redefs [hm/live-agents (constantly [route])
                                    hm/verify-target! (fn [_] route)
@@ -388,6 +401,7 @@
 (defn g1-send [root-path transport & args]
   (binding [hm/*root* root-path hm/*flow-id* "sender"
             hm/*with-reservation* pass-reservation hm/*transport* transport]
+      (seed-sender! (hm/root))
     (try (apply hm/send! args) (catch Exception error (.getMessage error)))))
 
 (deftest g1-stored-name-is-refreshed-on-the-same-live-identity
@@ -403,7 +417,7 @@
     (is (= 1 (count @prompts)))
     (is (= {:pane "p" :wait false}
            (select-keys (first @prompts) [:pane :wait])))
-    (is (= "#msg [\"sender\" \"after a rename\"]" (:envelope (first @prompts))))
+    (is (= "#msg [\"Mind Tests Primary\" \"after a rename\"]" (:envelope (first @prompts))))
     (let [sent (first (filter #(= :sent (:reason %))
                               (store/attempts-for root-path "00f95a")))]
       (is (= :Transported (:grade sent)))
@@ -448,13 +462,14 @@
                                  :agent "claude" :native_thread (:native_thread route)})
       (binding [hm/*root* root-path hm/*flow-id* "sender"
                 hm/*with-reservation* pass-reservation hm/*transport* transport]
+      (seed-sender! (hm/root))
         (is (= "Transported.{ 00f95a idle }"
                (hm/repair! "00f95a" pending-id "messaging-build" "w17:p1"
                            "term-live" "Psyche Opus 00f95a" "claude")))
         (is (thrown? Exception
                      (hm/repair! "00f95a" pending-id "messaging-build" "w17:p1"
                                  "term-live" "Psyche Opus 00f95a" "claude")))))
-    (is (= [{:pane "w17:p1" :envelope "#msg [\"sender\" \"repair then send\"]" :wait false}]
+    (is (= [{:pane "w17:p1" :envelope "#msg [\"Mind Tests Primary\" \"repair then send\"]" :wait false}]
            @prompts))
     (let [stored (store/route-for root-path "00f95a")
           attempts (store/attempts-for root-path "00f95a")]
@@ -536,6 +551,7 @@
                   (record-attempt! [_ _] (hm/fail "ledger unavailable"))
                   (record-pending! [_ _ _] nil))]
     (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*ledger* failing hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
       (persist-route! root-path route)
       (with-redefs [hm/live-agents (constantly [route])
                     hm/verify-target! (fn [_] route)
@@ -554,6 +570,7 @@
                       (binding [hm/*root* root-path hm/*flow-id* "sender"
                                 hm/*with-reservation* pass-reservation
                                 hm/*transport* (fake-transport good-agent target-agent processes prompts)]
+      (seed-sender! (hm/root))
                         (persist-route! root-path route)
                         (try (hm/send! "00f95a" "body" false nil)
                              (catch Exception error (.getMessage error)))))]
@@ -566,12 +583,14 @@
                                       :value (:native_thread route)})
                               [{:argv ["codex" "--dangerously-skip-permissions"]}])))
     (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
       (with-redefs [store/retirement-for (fn [_ flow] (when (= flow "00f95a") {:malformed true}))]
         (is (re-find #"Retirement marker" (try (hm/send! "00f95a" "body" false nil)
                                                (catch Exception error (.getMessage error)))))))
     (binding [hm/*root* root-path hm/*flow-id* "sender"
               hm/*with-reservation* (fn [_ _] (hm/fail "Reservation refused"))
               hm/*transport* (fake-transport good-agent good-agent good-process prompts)]
+      (seed-sender! (hm/root))
       (is (re-find #"Reservation refused" (try (hm/send! "00f95a" "body" false nil)
                                                (catch Exception error (.getMessage error))))))
     (is (= 1 @prompts))
@@ -586,6 +605,7 @@
         process [{:argv ["codex" "--thread" (:native_thread route)]}]
         transport (fake-transport good-agent good-agent process prompts)]
     (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation hm/*transport* transport]
+      (seed-sender! (hm/root))
       (persist-route! root-path (assoc route :route_hold "pane_move_in_progress"))
       (is (re-find #"RouteHold" (try (hm/send! "00f95a" "body" false nil) (catch Exception error (.getMessage error)))))
       (is (re-find #"RouteHold" (try (hm/send-abrupt! "00f95a" "body" false) (catch Exception error (.getMessage error)))))
@@ -601,7 +621,7 @@
       (is (every? #(= :msg (:variant %))
                   (filter #(contains? #{:Submitting :sent} (:reason %))
                           (store/attempts-for root-path "00f95a"))))
-      (is (every? #(= (hm/message-envelope "sender" {:variant :msg :body large-body}) (:submitted %))
+      (is (every? #(= (hm/message-envelope "Mind Tests Primary" {:variant :msg :body large-body}) (:submitted %))
                   (filter #(contains? #{:Submitting :sent} (:reason %))
                           (store/attempts-for root-path "00f95a"))))
       (let [writes (atom 0)
@@ -623,6 +643,7 @@
                                   prompts)]
     (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation
               hm/*transport* transport]
+      (seed-sender! (hm/root))
       (persist-route! root-path route)
       (is (re-find #"Held\.\{ 00f95a RelayOverflow"
                    (try (hm/send! "00f95a" body false nil)
@@ -661,6 +682,7 @@
         process [{:argv ["codex" "--thread" (:native_thread route)]}]]
     (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation
               hm/*transport* (fake-transport busy busy process prompts)]
+      (seed-sender! (hm/root))
       (with-redefs [hm/herdr! (fn [& args]
                                 (if (some #{"list"} args) {:agents [busy]}
                                     (throw (ex-info "unexpected Herdr call" {}))))]
@@ -822,6 +844,7 @@
       (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation
                 hm/*clock* (reify hm/Clock (current-time [_] "2026-10-03T12:00:00Z"))
                 hm/*transport* (retire-transport [(assoc route :name "Mind Sol renamed 00f95a") other-route])]
+      (seed-sender! (hm/root))
         (let [output (hm/retire! "00f95a")
               marker (store/retirement-for root-path "00f95a")
               path (get-in marker [:evidence :path])
@@ -854,6 +877,7 @@
   (let [root-path (fixture-registry! "hm-retire-refuse-")]
     (try
       (binding [hm/*root* root-path hm/*flow-id* "sender" hm/*with-reservation* pass-reservation]
+      (seed-sender! (hm/root))
         (binding [hm/*transport* (retire-transport [route other-route])]
           (is (= :UnknownFlow (first (retire-refusal "abcdef"))))
           (is (str/starts-with? (second (retire-refusal "abcdef")) "RetireRefused.{ abcdef UnknownFlow }")))
@@ -928,3 +952,57 @@
       ;; The retired native thread itself stays blocked for every other Flow.
       (is (thrown-with-msg? Exception #"is retired as Flow 00f95a"
                             (hm/assert-native-not-retired! (:native_thread route) "6f51ad"))))))
+
+(deftest registered-metaflow-origin-target-and-verbatim-variants
+  (let [root (str (fs/create-temp-dir {:prefix "hm-metaflow-"}))
+        target (assoc route :aspect "Field" :topic "Core" :layer "Secondary")
+        prompts (atom 0)
+        transport (fake-transport route route {:foreground_processes []} prompts)]
+    (try
+      (seed-sender! root)
+      (store/put-route! root "00f95a" target)
+      (binding [hm/*root* root hm/*flow-id* "sender" hm/*with-reservation* pass-reservation
+                hm/*transport* transport]
+        (is (= "00f95a" (hm/target-flow! "Field Core Secondary")))
+        (is (= "Mind Tests Primary" (hm/sender-origin!)))
+        (with-redefs [hm/verify-target! (constantly route)]
+          (doseq [request [{:variant :msg :body "message λ\n"}
+                           {:variant :psyche :context "exact context" :body "exact words λ\n"}
+                           {:variant :psyches :body (pr-str [["c1" "v1\n"] ["c2" "v2 λ"]])}]]
+            (is (str/starts-with? (hm/send-request! "Field Core Secondary" request false nil) "Transported")))
+          (is (= 3 @prompts))
+          (let [sent (filter #(= :sent (:reason %)) (store/attempts-for root "00f95a"))]
+            (is (= #{:msg :psyche :psyches} (set (map :variant sent))))
+            (doseq [attempt sent]
+              (is (= "00f95a" (:flow attempt)))
+              (case (:variant attempt)
+                :msg (is (= ["Mind Tests Primary" "message λ\n"] (hm/read-pane-message (:submitted attempt))))
+                :psyche (is (= ["Mind Tests Primary" "exact context" "exact words λ\n"] (hm/read-psyche-message (:submitted attempt))))
+                :psyches (is (= [["Mind Tests Primary" "c1" "v1\n"] ["Mind Tests Primary" "c2" "v2 λ"]]
+                                (hm/read-psyches-message (:submitted attempt))))))))
+        (store/put-route! root "duplicate" (assoc target :pane_id "other" :terminal_id "other"))
+        (is (thrown-with-msg? Exception #"AmbiguousTarget" (hm/send! "Field Core Secondary" "no" false nil)))
+        (is (= 3 @prompts))
+        (is (thrown? Exception (hm/target-flow! "Field.Core.Secondary")))
+        (is (thrown-with-msg? Exception #"TargetNotRegistered" (hm/target-flow! "Mind Missing Primary")))
+        (store/put-route! root "sender" route)
+        (is (thrown-with-msg? Exception #"MetaflowMetadataRequired" (hm/send! "00f95a" "no" false nil)))
+        (store/remove-route! root "sender")
+        (is (thrown-with-msg? Exception #"SenderNotRegistered" (hm/send! "00f95a" "no" false nil)))
+        (is (= 3 @prompts)))
+      (finally (fs/delete-tree root)))))
+
+(deftest explicit-registration-metadata-persists-without-title-inference
+  (let [root (str (fs/create-temp-dir {:prefix "hm-meta-register-"}))
+        transport (fake-transport route route [] (atom 0))
+        metadata {:aspect "Mind" :topic "Core" :layer "Secondary"}]
+    (try
+      (binding [hm/*root* root hm/*with-reservation* pass-reservation hm/*transport* transport]
+        (with-redefs [hm/herdr! (fn [& _] {:agents [route]})]
+          (hm/register! "00f95a" (:name route) "s" (:native_thread route) metadata)
+          (is (= metadata (select-keys (store/route-for root "00f95a") [:aspect :topic :layer])))
+          (hm/register! "00f95a" (:name route) "s" (:native_thread route))
+          (is (= metadata (select-keys (store/route-for root "00f95a") [:aspect :topic :layer])))
+          (is (thrown? Exception (hm/register! "00f95a" (:name route) "s" (:native_thread route) {:aspect "Mind"})))
+          (is (thrown? Exception (hm/metadata! (assoc metadata :topic "Core.Secondary"))))))
+      (finally (fs/delete-tree root)))))

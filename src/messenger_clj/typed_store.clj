@@ -20,7 +20,7 @@
 (def Route
   [:map {:closed true}
    [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string]
-   [:agent :string] [:native_thread {:optional true} :string]
+   [:agent :string] [:aspect {:optional true} :string] [:topic {:optional true} :string] [:layer {:optional true} :string] [:native_thread {:optional true} :string]
    [:route_hold {:optional true} :string]
    [:transition {:optional true} :boolean]
    [:state :string]])
@@ -28,7 +28,7 @@
   [:map {:closed true}
    [:session {:optional true} :string] [:name {:optional true} :string]
    [:pane_id {:optional true} :string] [:terminal_id {:optional true} :string]
-   [:agent {:optional true} :string] [:native_thread {:optional true} :string]
+   [:agent {:optional true} :string] [:aspect {:optional true} :string] [:topic {:optional true} :string] [:layer {:optional true} :string] [:native_thread {:optional true} :string]
    [:route_hold {:optional true} :string] [:transition {:optional true} :boolean]
    [:state {:optional true} :string]])
 (def Attempt
@@ -60,14 +60,14 @@
    :route/flow {:db/valueType :db.type/ref :db/cardinality :db.cardinality/one
                 :db/unique :db.unique/identity}
    :route/session {} :route/name {} :route/pane {} :route/terminal {}
-   :route/agent {} :route/thread {} :route/hold {} :route/transition {} :route/state {}
+   :route/agent {} :route/thread {} :route/aspect {} :route/topic {} :route/layer {} :route/hold {} :route/transition {} :route/state {}
    :attempt/id {:db/unique :db.unique/identity}
    :attempt/flow {:db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
    :attempt/at {} :attempt/grade {} :attempt/reason {} :attempt/variant {}
    :attempt/context {} :attempt/body {} :attempt/part-index {} :attempt/part-count {}
    :attempt/submitted {}
    :attempt.binding/session {} :attempt.binding/name {} :attempt.binding/pane {}
-   :attempt.binding/terminal {} :attempt.binding/agent {} :attempt.binding/thread {}
+   :attempt.binding/terminal {} :attempt.binding/agent {} :attempt.binding/thread {} :attempt.binding/aspect {} :attempt.binding/topic {} :attempt.binding/layer {}
    :attempt.binding/hold {} :attempt.binding/transition {} :attempt.binding/state {}
    :pending/id {:db/unique :db.unique/identity}
    :pending/attempt {:db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
@@ -123,6 +123,9 @@
         (assoc (keyword prefix "session") (:session route) (keyword prefix "name") (:name route)
                (keyword prefix "pane") (:pane_id route) (keyword prefix "terminal") (:terminal_id route)
                (keyword prefix "agent") (:agent route) (keyword prefix "state") (:state route))
+        (assoc-present (keyword prefix "aspect") (:aspect route))
+        (assoc-present (keyword prefix "topic") (:topic route))
+        (assoc-present (keyword prefix "layer") (:layer route))
         (assoc-present (keyword prefix "thread") (:native_thread route))
         (assoc-present (keyword prefix "hold") (:route_hold route))
         (assoc-present (keyword prefix "transition") (:transition route)))))
@@ -130,6 +133,9 @@
   (let [getv #(get entity (keyword prefix %))]
     (route! (cond-> {:session (getv "session") :name (getv "name") :pane_id (getv "pane")
                      :terminal_id (getv "terminal") :agent (getv "agent") :state (getv "state")}
+              (getv "aspect") (assoc :aspect (getv "aspect"))
+              (getv "topic") (assoc :topic (getv "topic"))
+              (getv "layer") (assoc :layer (getv "layer"))
               (getv "thread") (assoc :native_thread (getv "thread"))
               (getv "hold") (assoc :route_hold (getv "hold"))
               (some? (getv "transition")) (assoc :transition (getv "transition"))))))
@@ -140,6 +146,9 @@
       (assoc-present :attempt.binding/pane (:pane_id binding))
       (assoc-present :attempt.binding/terminal (:terminal_id binding))
       (assoc-present :attempt.binding/agent (:agent binding))
+      (assoc-present :attempt.binding/aspect (:aspect binding))
+      (assoc-present :attempt.binding/topic (:topic binding))
+      (assoc-present :attempt.binding/layer (:layer binding))
       (assoc-present :attempt.binding/thread (:native_thread binding))
       (assoc-present :attempt.binding/hold (:route_hold binding))
       (assoc-present :attempt.binding/transition (:transition binding))
@@ -152,6 +161,9 @@
             (:attempt.binding/pane entity) (assoc :pane_id (:attempt.binding/pane entity))
             (:attempt.binding/terminal entity) (assoc :terminal_id (:attempt.binding/terminal entity))
             (:attempt.binding/agent entity) (assoc :agent (:attempt.binding/agent entity))
+            (:attempt.binding/aspect entity) (assoc :aspect (:attempt.binding/aspect entity))
+            (:attempt.binding/topic entity) (assoc :topic (:attempt.binding/topic entity))
+            (:attempt.binding/layer entity) (assoc :layer (:attempt.binding/layer entity))
             (:attempt.binding/thread entity) (assoc :native_thread (:attempt.binding/thread entity))
             (:attempt.binding/hold entity) (assoc :route_hold (:attempt.binding/hold entity))
             (some? (:attempt.binding/transition entity)) (assoc :transition (:attempt.binding/transition entity))
@@ -159,7 +171,7 @@
 
 (def route-pull
   [:route/session :route/name :route/pane :route/terminal :route/agent :route/thread
-   :route/hold :route/transition :route/state
+   :route/aspect :route/topic :route/layer :route/hold :route/transition :route/state
    {:route/flow [:flow/id]}])
 (def attempt-pull
   [:attempt/id :attempt/at :attempt/grade :attempt/reason :attempt/variant
@@ -167,7 +179,7 @@
    :attempt/submitted
    :attempt.binding/session :attempt.binding/name :attempt.binding/pane
    :attempt.binding/terminal :attempt.binding/agent :attempt.binding/thread
-   :attempt.binding/hold :attempt.binding/transition :attempt.binding/state
+   :attempt.binding/aspect :attempt.binding/topic :attempt.binding/layer :attempt.binding/hold :attempt.binding/transition :attempt.binding/state
    {:attempt/flow [:flow/id]}])
 (def pending-pull
   [:pending/message :pending/variant :pending/context :pending/part-index

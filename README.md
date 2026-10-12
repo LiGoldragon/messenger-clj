@@ -149,3 +149,30 @@ Set `MESSENGER_CLJ_DATALEVIN_POD` to a Datalevin 0.8.25 `dtlv` to use the
 pinned pod instead of fetching it. The suite uses fake Herdr boundaries and
 temporary Datalevin stores. It never sends to a live route, but one core test
 takes a Lock through the `orchestrate` on `PATH`.
+
+
+## Registered metaflow names
+
+Send to a quoted `"Aspect Topic Layer"`, for example
+`FLOW_ID=<internal-id> hm-send "Psyche Core Secondary" --stdin`.
+The displayed origin in every live `#msg`, `#psyche`, and `#psyches` send
+is the sender registration's `aspect topic layer`, with single spaces.
+Internal flow IDs remain transport and audit keys, and remain accepted as
+TARGET. Dotted names are not aliases. Names never come from a model, native
+UUID, terminal title, or guessed layer.
+
+Account for each existing seat's metadata explicitly with its normal exact
+registration: `hm-register ID NAME --session SESSION --native-thread UUID
+--aspect ASPECT --topic TOPIC --layer LAYER`. Supply all three fields together;
+ordinary re-registration without these flags preserves already stored fields.
+Old registrations remain readable, but sending without complete metadata
+refuses. An unregistered sender also refuses; there is no invented origin or
+fallback to its internal ID. A missing or ambiguous named target refuses.
+Registration still validates the same live native identity; metadata does
+not replace transport, retirement, or receiving readiness checks.
+
+Envelope readers retain historical ID-bearing records as data. Psyche context
+and verbatim bytes are unchanged. Deployment must register qualified metadata
+before enabling new sends, preserve the typed-store backup and old pinned
+package, and witness a real registered sender/recipient envelope. Do not
+infer this native proof from tests or a successful package build.

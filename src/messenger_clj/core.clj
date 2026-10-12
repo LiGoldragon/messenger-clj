@@ -15,18 +15,22 @@
 (def failure-reasons #{:NotRegistered :NeedsBinding :InTransition :RouteHold :IdentityChanged :PaneMissing :Blocked :ProcessMismatch :Stalled :Uncertain :RelayOverflow :Submitting :RepairCandidate :RepairRequired :RouteRepaired :InvalidBinding :sent})
 (def delivery-grades #{:Transported :Presented :Fallback-Presented :Repaired :Held :Uncertain})
 (def FlowId [:and [:string {:min 1 :max 96}] [:re #"^[A-Za-z0-9][A-Za-z0-9_-]*$"]])
+(def MetaflowPart [:and :string [:re #"^[A-Za-z0-9][A-Za-z0-9_-]*$"]])
+(def Metaflow [:and :string [:re #"^[A-Za-z0-9][A-Za-z0-9_-]* [A-Za-z0-9][A-Za-z0-9_-]* [A-Za-z0-9][A-Za-z0-9_-]*$"]])
+;; Readers retain historical ID envelopes; live sends resolve registered metadata first.
+(def EnvelopeOrigin [:or FlowId Metaflow])
 (def NativeThread [:and [:string {:min 16 :max 96}] [:re #"^[A-Za-z0-9][A-Za-z0-9-]+$"]])
 (def MessageBody [:string {:min 1}])
 (def MessageVariant [:enum :msg :psyche :psyches])
-(def RouteBinding [:map {:closed true} [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string] [:agent :string] [:native_thread {:optional true} NativeThread] [:route_hold {:optional true} :string] [:transition {:optional true} :boolean] [:state {:optional true} :string]])
+(def RouteBinding [:map {:closed true} [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string] [:agent :string] [:aspect {:optional true} MetaflowPart] [:topic {:optional true} MetaflowPart] [:layer {:optional true} MetaflowPart] [:native_thread {:optional true} NativeThread] [:route_hold {:optional true} :string] [:transition {:optional true} :boolean] [:state {:optional true} :string]])
 (def DeliveryAttempt [:map {:closed true} [:id :string] [:at :string] [:flow FlowId] [:reason :keyword] [:grade {:optional true} :keyword] [:variant {:optional true} MessageVariant] [:context {:optional true} [:maybe MessageBody]] [:body {:optional true} MessageBody] [:part_index {:optional true} pos-int?] [:part_count {:optional true} pos-int?] [:submitted {:optional true} :string] [:binding {:optional true} RouteBinding]])
 (def PendingIntent [:map {:closed true} [:attempt DeliveryAttempt] [:message MessageBody] [:variant {:optional true} MessageVariant] [:context {:optional true} [:maybe MessageBody]] [:part_index {:optional true} pos-int?] [:part_count {:optional true} pos-int?] [:state [:= "held"]]])
 (def RouteIdentity [:map {:closed true} [:session :string] [:name :string] [:pane_id :string] [:terminal_id :string] [:agent :string]])
 (def RetirementEvidence [:map {:closed true} [:path :string] [:sha256 [:re #"^[0-9a-f]{64}$"]]])
 (def RetirementMarker [:map {:closed true} [:version [:= 1]] [:state [:= "retired"]] [:flow FlowId] [:record RouteIdentity] [:native_thread NativeThread] [:evidence RetirementEvidence] [:retired_by :string] [:retired_at :string]])
 (def Reservation [:map {:closed true} [:id :int] [:flow FlowId] [:root :string]])
-(def PaneMessage [:tuple FlowId MessageBody])
-(def PsycheMessage [:tuple FlowId MessageBody MessageBody])
+(def PaneMessage [:tuple EnvelopeOrigin MessageBody])
+(def PsycheMessage [:tuple EnvelopeOrigin MessageBody MessageBody])
 (def PsychesMessage [:vector {:min 1} PsycheMessage])
 (def PsychesInput [:vector {:min 1} [:tuple MessageBody MessageBody]])
 (def MessageRequest [:map {:closed true} [:variant MessageVariant] [:body MessageBody] [:context {:optional true} [:maybe MessageBody]]])
@@ -38,7 +42,7 @@
     value
     (throw (ex-info (str "Invalid " label ": " (pr-str (m/explain schema value)))
                     {:hm/failure true :hm/invalid true}))))
-(declare ->DatalevinLedger record-attempt! record-pending! route-records nonempty-strings! record-sent! held!)
+(declare ->DatalevinLedger record-attempt! record-pending! route-records nonempty-strings! record-sent! held! sender-origin!)
 (defn flow-id! [value]
   (when-not (and (string? value) (re-matches #"[A-Za-z0-9][A-Za-z0-9_-]{0,95}" value))
     (fail "Flow ID must contain only letters, digits, underscores, or hyphens"))
@@ -159,7 +163,7 @@
       (read-psyches-input (:body request)))
     request))
 (defn message-envelope [sender request]
-  (flow-id! sender)
+  (valid! EnvelopeOrigin sender "EnvelopeOrigin")
   (let [{:keys [variant context body]} (request! request)
         [tag value reader] (case variant
                              :msg ["#msg" (read-msg [sender body]) read-pane-message]
@@ -495,8 +499,7 @@
   (let [route (when (and route (m/validate RouteBinding route)) route)
         {:keys [variant context body]} (request! request)
         repair-envelope (when (= reason :RepairRequired)
-                          (message-envelope (or *flow-id* (System/getenv "FLOW_ID")
-                                                (fail "Set FLOW_ID before holding a repair"))
+                          (message-envelope (sender-origin!)
                                             request))
         attempt (append-attempt! flow reason :Held route request repair-envelope)
         pending (valid! PendingIntent
@@ -509,8 +512,43 @@
         (fail "Pending ledger index did not confirm persistence")))
     (throw (ex-info (str "Held.{ " flow " " (name reason) " attempt-" (subs (:id attempt) 0 12) " }")
                     {:hm/failure true :hm/held true :hm/attempt-id (:id attempt)}))))
-(defn register! [flow name session native-thread]
+(defn metadata! [metadata]
+  (let [selected (select-keys metadata [:aspect :topic :layer])]
+    (when-not (= #{:aspect :topic :layer} (set (keys selected)))
+      (fail "MetaflowMetadataRequired: aspect, topic and layer must be supplied together"))
+    (doseq [[k v] selected] (valid! MetaflowPart v (name k)))
+    selected))
+(defn metaflow! [route]
+  (let [{:keys [aspect topic layer]} (metadata! route)]
+    (str aspect " " topic " " layer)))
+(defn sender-origin! []
+  (let [sender (flow-id! (or *flow-id* (System/getenv "FLOW_ID")
+                            (fail "Set FLOW_ID to your own flow ID before sending")))]
+    (assert-not-retired! sender)
+    (let [route (load-route (registry) sender)]
+      (when-not route (fail "SenderNotRegistered: register the sender with explicit metaflow metadata"))
+      (when (or (needs-binding? route) (in-transition? route) (:route_hold route))
+        (fail "SenderBindingUnavailable: sender registration is not usable"))
+      (metaflow! route))))
+(defn target-flow! [target]
+  (if (m/validate FlowId target)
+    target
+    (do
+      (valid! Metaflow target "TARGET metaflow (aspect topic layer)")
+      (let [matches (for [[id route] (route-records)
+                          :when (and (every? #(m/validate MetaflowPart (get route %)) [:aspect :topic :layer])
+                                     (= target (metaflow! route)))] id)]
+        (when-not (= 1 (count matches))
+          (fail (str (if (empty? matches) "TargetNotRegistered" "AmbiguousTarget") ": " target)))
+        (first matches)))))
+(defn assert-target! [target flow]
+  (when (and (not= target flow) (not= flow (target-flow! target)))
+    (fail "TargetIdentityChanged: registered metaflow changed before send")))
+(defn register!
+  ([flow name session native-thread] (register! flow name session native-thread nil))
+  ([flow name session native-thread metadata]
   (flow-id! flow)
+  (when metadata (metadata! metadata))
   (with-reservation flow
     (fn []
       (assert-not-retired! flow)
@@ -536,8 +574,9 @@
                 _ (assert-native-not-retired! native-thread flow)
                 _ (nonempty-strings! "Herdr registration has no agent kind" [(:agent a)])
                 route (valid! RouteBinding
-                                    (assoc (select-keys a [:session :name :pane_id :terminal_id :agent])
-                                           :native_thread native-thread)
+                                    (merge (select-keys a [:session :name :pane_id :terminal_id :agent])
+                                           {:native_thread native-thread}
+                                           (select-keys existing [:aspect :topic :layer]) metadata)
                                     "RouteBinding")]
             (when (and existing (not (same-stable-route? existing route)))
               (fail "Flow is already registered to a different live route identity"))
@@ -545,7 +584,7 @@
                         (route-records))
               (fail "Live route identity is already registered to another Flow"))
             (save-route! (registry) flow route)
-            (str "Registered " flow ": " (:name route) " (" session ")")))))))
+            (str "Registered " flow ": " (:name route) " (" session ")"))))))))
 (defn repair! [flow pending-id session pane-id terminal-id name agent-kind]
   (flow-id! flow)
   (nonempty-strings! "Repair requires pending ID and every exact candidate identity field"
@@ -843,13 +882,13 @@
     (when (some nested-relay? values)
       (fail "Nested complete #msg or #psyche or #psyches form is not a message field"))
     request))
-(defn send-abrupt-request! [flow request wait-presented]
-  (flow-id! flow)
-  (let [request (validate-request! request)]
-  (let [sender (or *flow-id* (System/getenv "FLOW_ID") (fail "Set FLOW_ID to your own flow ID before sending"))]
+(defn send-abrupt-request! [target request wait-presented]
+  (let [flow (target-flow! target) request (validate-request! request)]
+  (let [sender (sender-origin!)]
     (with-reservation flow
       (fn []
         (assert-not-retired! flow)
+         (assert-target! target flow)
           (let [route (read-route flow)]
           (when (needs-binding? route) (held! flow :NeedsBinding request route))
           (when (in-transition? route) (held! flow :InTransition request route))
@@ -900,13 +939,13 @@
                       {:hm/failure true :hm/post-ledger true})))))
 (defn send-request!
   ([flow request wait-presented pane] (send-request! flow request wait-presented pane 10))
-  ([flow request wait-presented pane hold-seconds]
-   (flow-id! flow)
-   (let [request (validate-request! request)]
-   (let [sender (or *flow-id* (System/getenv "FLOW_ID") (fail "Set FLOW_ID to your own flow ID before sending"))]
+  ([target request wait-presented pane hold-seconds]
+   (let [flow (target-flow! target) request (validate-request! request)]
+   (let [sender (sender-origin!)]
      (with-reservation flow
        (fn []
          (assert-not-retired! flow)
+         (assert-target! target flow)
          (let [raw-stored (try (load-route (registry) flow) (catch Exception _ nil))
                stored (try (when raw-stored (route-binding! raw-stored)) (catch Exception _ nil))]
            (when (in-transition? raw-stored) (held! flow :InTransition request stored))

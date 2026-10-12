@@ -15,10 +15,18 @@
 
 (def native-thread "00000000-0000-0000-0000-000000000000")
 
+(defn seed-cli-sender! [environment wrapper]
+  (when (contains? #{"hm-send" "hm-send-abrupt"} wrapper)
+    (store/put-route! (get environment "HM_REGISTRY") "sender"
+                      {:session "s" :name "sender" :pane_id "sender-pane" :terminal_id "sender-terminal"
+                       :agent "codex" :native_thread native-thread
+                       :aspect "Mind" :topic "Tests" :layer "Primary"})))
 (defn invoke [environment wrapper & arguments]
+  (seed-cli-sender! environment wrapper)
   (apply shell {:out :string :err :string :continue true :extra-env environment}
          (str (fs/absolutize (fs/path "bin" wrapper))) arguments))
 (defn invoke-input [environment input wrapper & arguments]
+  (seed-cli-sender! environment wrapper)
   (apply shell {:in input :out :string :err :string :continue true :extra-env environment}
          (str (fs/absolutize (fs/path "bin" wrapper))) arguments))
 
@@ -88,7 +96,7 @@
           (is (= expected-exit (:exit sent)) (str wait-result ": " (:err sent)))
           (is (str/includes? (str (:out sent) (:err sent)) (name expected-grade)))
           (is (= 1 (count @(:requests prompt-server))))
-          (is (= (str "#msg [\"sender\" \"wait-" wait-result "\"]")
+          (is (= (str "#msg [\"Mind Tests Primary\" \"wait-" wait-result "\"]")
                  (get-in (first @(:requests prompt-server)) [:params :text])))
           (is (= 1 (count (filter #(= :Submitting (:reason %)) attempts))))
           (is (some #(and (= expected-grade (:grade %))
@@ -148,7 +156,8 @@
       (.setExecutable (java.io.File. (str orchestrate)) true)
 
       (let [registered (invoke environment "hm-register" "00f95a" "Mind Sol 00f95a"
-                               "--session" "s" "--native-thread" native-thread)]
+                               "--session" "s" "--native-thread" native-thread
+                               "--aspect" "Field" "--topic" "Core" "--layer" "Secondary")]
         (is (zero? (:exit registered)) (:err registered))
         (is (str/includes? (:out registered) "Registered 00f95a")))
       (let [listed (invoke environment "hm-list")]
@@ -160,10 +169,11 @@
         (is (= 1 (:version value)))
         (is (= [{:flow "00f95a"
                  :route {:session "s" :name "Mind Sol 00f95a" :pane_id "p" :terminal_id "t"
-                         :agent "codex" :native_thread native-thread :state "Bound"}}]
+                         :agent "codex" :native_thread native-thread :state "Bound"
+                         :aspect "Field" :topic "Core" :layer "Secondary"}}]
                (:routes value)))
         (is (= [] (:retirements value))))
-      (let [sent (invoke environment "hm-send" "00f95a" "isolated-success")]
+      (let [sent (invoke environment "hm-send" "Field Core Secondary" "isolated-success")]
         (is (zero? (:exit sent)) (:err sent))
         (is (str/includes? (:out sent) "Transported.{ 00f95a working }"))
         (is (some #(= :Submitting (:reason %)) (store/attempts-for root "00f95a"))))
@@ -193,12 +203,12 @@
         (is (> (alength (.getBytes verbatim StandardCharsets/UTF_8)) (* 128 1024)))
         (is (> (alength (.getBytes (nth envelopes 4) StandardCharsets/UTF_8)) (* 128 1024)))
         (is (= 5 (count envelopes)))
-        (is (= ["sender" short-body] (second values)))
-        (is (= ["sender" long-body] (nth values 2)))
-        (is (= ["sender" context verbatim] (nth values 3)))
+        (is (= ["Mind Tests Primary" short-body] (second values)))
+        (is (= ["Mind Tests Primary" long-body] (nth values 2)))
+        (is (= ["Mind Tests Primary" context verbatim] (nth values 3)))
         (is (= context (second (nth values 3))))
         (is (= (mapv (fn [[record-context record-verbatim]]
-                       ["sender" record-context record-verbatim]) plural-records)
+                       ["Mind Tests Primary" record-context record-verbatim]) plural-records)
                (nth values 4)))
         (is (not-any? #(str/includes? % "Message too long for a pane") envelopes))
         (is (= #{short-body long-body}
@@ -265,7 +275,7 @@
         (let [snapshot (invoke environment "hm-heartbeat-state")
               value (json/parse-string (:out snapshot) true)]
           (is (zero? (:exit snapshot)) (:err snapshot))
-          (is (= [] (:routes value)))
+          (is (= ["sender"] (mapv :flow (:routes value))))
           (is (= ["00f95a"] (mapv :flow (:retirements value)))))
         (is (empty? (fs/glob root "**/*.edn"))
             "operational commands create no EDN authority files"))

@@ -119,3 +119,17 @@
 
 (deftest pod-version-is-explicitly-pinned
   (is (= "0.8.25" typed/pod-version)))
+
+(deftest metaflow-metadata-roundtrips-in-route-and-attempt-with-legacy-preserved
+  (with-temp-store
+    (fn [root]
+      (let [metadata {:aspect "Psyche" :topic "Core" :layer "Secondary"}
+            enriched (merge route metadata)
+            recorded (assoc attempt :binding enriched)]
+        (typed/put-route! root flow enriched)
+        (typed/put-attempt! root recorded)
+        (is (= (typed/route! enriched) (typed/route-for root flow)))
+        (is (= recorded (typed/attempt-by-id root (:id attempt))))
+        (typed/put-route! root flow route)
+        (is (= (typed/route! route) (typed/route-for root flow)))
+        (is (= recorded (typed/attempt-by-id root (:id attempt))))))))

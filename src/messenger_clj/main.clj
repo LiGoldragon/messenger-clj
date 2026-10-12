@@ -6,11 +6,13 @@
                     "  messenger-clj send TARGET --stdin [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --psyche CONTEXT (VERBATIM|--stdin) [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --psyches --stdin [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
+                    "  messenger-clj register FLOW NAME [--session SESSION] [--native-thread UUID] [--aspect ASPECT --topic TOPIC --layer LAYER]\n"
+                    "  TARGET is an internal ID or one quoted \"Aspect Topic Layer\" identifier.\n"
                     "  messenger-clj retire FLOW\n"
                     hm/skill-note))
 (defn arg [xs option] (second (drop-while #(not= option %) xs)))
 (defn parse-error [message] (throw (ex-info message {:hm/parse true})))
-(def value-options #{"--session" "--native-thread" "--old-name" "--pending-id" "--pane-id" "--terminal-id" "--name" "--agent" "--process-pid" "--evidence" "--evidence-sha256" "--hold-seconds" "--pane" "--target" "--receipt"})
+(def value-options #{"--aspect" "--topic" "--layer" "--session" "--native-thread" "--old-name" "--pending-id" "--pane-id" "--terminal-id" "--name" "--agent" "--process-pid" "--evidence" "--evidence-sha256" "--hold-seconds" "--pane" "--target" "--receipt"})
 (defn expand-equals [xs]
   (mapcat #(if-let [[_ option value] (re-matches #"(--[^=]+)=(.*)" %)] [option value] [%]) xs))
 (defn normalize-options [xs]
@@ -101,9 +103,13 @@
                                      (hm/send-abrupt! flow body (boolean (some #{"--wait-presented"} rest))))))
           "register" (let [[flow name & rest] xs session (arg rest "--session") thread (arg rest "--native-thread")]
                        (when-not (and flow name) (parse-error "the following arguments are required: flow, name"))
-                       (unknown-flags! rest #{"--session" "--native-thread"})
-                       (extra-values! rest #{"--session" "--native-thread"})
-                       (println (hm/register! flow name session thread)))
+                       (unknown-flags! rest #{"--session" "--native-thread" "--aspect" "--topic" "--layer"})
+                       (extra-values! rest #{"--session" "--native-thread" "--aspect" "--topic" "--layer"})
+                       (let [metadata (into {} (keep (fn [[k flag]] (when-let [v (arg rest flag)] [k v]))
+                                                     [[:aspect "--aspect"] [:topic "--topic"] [:layer "--layer"]]))]
+                         (println (if (seq metadata)
+                                    (hm/register! flow name session thread metadata)
+                                    (hm/register! flow name session thread)))))
           "repair" (let [[flow & rest] xs]
                      (when-not flow (parse-error "the following arguments are required: flow"))
                      (unknown-flags! rest #{"--pending-id" "--session" "--pane-id" "--terminal-id" "--name" "--agent"})
