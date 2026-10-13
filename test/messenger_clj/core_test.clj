@@ -459,7 +459,8 @@
                               (store/attempts-for root-path "00f95a")))))
       (persist-route! root-path {:session "messaging-build" :pane_id "w17:p1"
                                  :terminal_id "term-live" :name "Psyche Opus 00f95a"
-                                 :agent "claude" :native_thread (:native_thread route)})
+                                 :agent "claude" :native_thread (:native_thread route)
+                                 :aspect "Psyche" :topic "Core" :layer "Primary"})
       (binding [hm/*root* root-path hm/*flow-id* "sender"
                 hm/*with-reservation* pass-reservation hm/*transport* transport]
       (seed-sender! (hm/root))
@@ -473,6 +474,9 @@
            @prompts))
     (let [stored (store/route-for root-path "00f95a")
           attempts (store/attempts-for root-path "00f95a")]
+      (is (= {:aspect "Psyche" :topic "Core" :layer "Primary"}
+             (select-keys stored [:aspect :topic :layer])))
+      (is (= "Psyche Core Primary" (get (store/metaflow-identities root-path) "00f95a")))
       (is (= "term-live" (:terminal_id stored)))
       (is (= (:native_thread route) (:native_thread stored)))
       (is (= 1 (count (filter #(= :RouteRepaired (:reason %)) attempts))))

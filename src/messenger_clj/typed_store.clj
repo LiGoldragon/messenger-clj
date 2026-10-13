@@ -4,6 +4,7 @@
   (:require [babashka.fs :as fs]
             [babashka.pods :as pods]
             [clojure.edn :as edn]
+            [clojure.string :as str]
             [malli.core :as m]))
 
 (def pod-version "0.8.25")
@@ -57,6 +58,7 @@
 
 (def schema
   {:flow/id {:db/unique :db.unique/identity}
+   :flow/metaflow {}
    :route/flow {:db/valueType :db.type/ref :db/cardinality :db.cardinality/one
                 :db/unique :db.unique/identity}
    :route/session {} :route/name {} :route/pane {} :route/terminal {}
@@ -191,6 +193,11 @@
    :retirement/evidence-path :retirement/evidence-sha256
    :retirement/retired-by :retirement/at {:retirement/flow [:flow/id]}])
 
+(defn- named-identity [flow route]
+  (let [metadata (map route [:aspect :topic :layer])]
+    (cond-> {:flow/id flow}
+      (every? #(and (string? %) (re-matches #"[A-Za-z0-9][A-Za-z0-9_-]*" %)) metadata)
+      (assoc :flow/metaflow (str/join " " metadata)))))
 (defn- route-tx [root flow route]
   (let [route (route! route)
         current (some-> (query root '[:find (pull ?route [*])
@@ -208,7 +215,7 @@
                                      (not= attribute :route/flow)
                                      (not (contains? replacement attribute)))]
                       [:db/retract entity-id attribute value])]
-    (vec (concat retractions [{:flow/id flow} replacement]))))
+    (vec (concat retractions [(named-identity flow route) replacement]))))
 (defn put-route! [root flow route]
   (let [route (route! route)]
     (transact! root (route-tx root flow route))
@@ -239,7 +246,10 @@
   (when-let [entity-id (query root '[:find ?route . :in $ ?flow
                                      :where [?f :flow/id ?flow] [?route :route/flow ?f]]
                               flow)]
-    (transact! root [[:db/retractEntity entity-id]]))
+    ;; A named route written by an older package may have no flow/metaflow
+    ;; attribute yet. Preserve only its explicit metadata in this same removal.
+    (transact! root [(named-identity flow (stored-route-for root flow))
+                     [:db/retractEntity entity-id]]))
   nil)
 
 (defn- attempt-tx [attempt]
@@ -407,3 +417,10 @@
     (when-not (sequential? entities)
       (throw (ex-info "Typed import must contain a sequential EDN value" {:value entities})))
     (mapv boundary-entity! entities)))
+
+(defn metaflow-identities
+  "Names retained after route removal. Internal IDs never leave the public API."
+  [root]
+  (into {} (checked-rows!
+             (query root '[:find ?flow ?metaflow
+                           :where [?f :flow/id ?flow] [?f :flow/metaflow ?metaflow]]) 2)))

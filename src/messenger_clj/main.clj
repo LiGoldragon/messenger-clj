@@ -1,14 +1,13 @@
 (ns messenger-clj.main
-  (:require [messenger-clj.core :as hm]
-            [messenger-clj.legacy-import :as legacy]))
+  (:require [messenger-clj.public :as hm]))
 (defn usage [] (str "Usage: messenger-clj <send|send-abrupt|register|repair|deregister|rebind|move|retire|import-retirement|import-json|heartbeat-state|list> ...\n"
                     "  messenger-clj send TARGET BODY [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --stdin [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --psyche CONTEXT (VERBATIM|--stdin) [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
                     "  messenger-clj send TARGET --psyches --stdin [--wait-presented] [--hold-seconds N] [--pane SESSION:PANE]\n"
-                    "  messenger-clj register FLOW NAME [--session SESSION] [--native-thread UUID] [--aspect ASPECT --topic TOPIC --layer LAYER]\n"
-                    "  TARGET is an internal ID or one quoted \"Aspect Topic Layer\" identifier.\n"
-                    "  messenger-clj retire FLOW\n"
+                    "  messenger-clj register METAFLOW NAME [--session SESSION] [--native-thread UUID] [--aspect ASPECT --topic TOPIC --layer LAYER]\n"
+                    "  TARGET is only one quoted \"Aspect Topic Layer\" identifier.\n"
+                    "  messenger-clj retire METAFLOW\n"
                     hm/skill-note))
 (defn arg [xs option] (second (drop-while #(not= option %) xs)))
 (defn parse-error [message] (throw (ex-info message {:hm/parse true})))
@@ -150,7 +149,7 @@
                        (println (hm/move! flow session pane-id terminal-id name agent native-thread pid workspace)))))
           "retire" (let [[flow & rest] xs]
                      (when-not flow (parse-error "the following arguments are required: flow"))
-                     (when (seq rest) (parse-error (str "unrecognized arguments: " (first rest) "; retire takes only the flow id")))
+                     (when (seq rest) (parse-error (str "unrecognized arguments: " (first rest) "; retire takes only the metaflow name")))
                      (println (hm/retire! flow)))
           "import-retirement" (let [[flow & rest] xs]
                                 (when-not flow (parse-error "the following arguments are required: flow"))
@@ -168,7 +167,7 @@
                           (let [target (arg rest "--target") receipt (arg rest "--receipt")]
                             (when-not (and target receipt)
                               (parse-error "the following arguments are required: --target, --receipt"))
-                            (println (legacy/import-json! source target receipt
+                            (println (hm/import-json! source target receipt
                                                           (boolean (some #{"--apply"} rest))))))
           "heartbeat-state" (do (when (seq xs) (parse-error "unrecognized arguments"))
                                 (println (hm/heartbeat-state!)))

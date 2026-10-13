@@ -133,3 +133,31 @@
         (typed/put-route! root flow route)
         (is (= (typed/route! route) (typed/route-for root flow)))
         (is (= recorded (typed/attempt-by-id root (:id attempt))))))))
+
+(deftest named-identity-survives-route-removal-without-changing-old-records
+  (with-temp-store
+    (fn [root]
+      (typed/put-route! root flow route)
+      (is (= {} (typed/metaflow-identities root)) "An old unnamed route acquires no invented metadata")
+      (let [named (assoc route :aspect "Field" :topic "Core" :layer "Secondary")]
+        (typed/put-route! root flow named)
+        (typed/put-attempt! root attempt)
+        (is (= {flow "Field Core Secondary"} (typed/metaflow-identities root)))
+        (typed/remove-route! root flow)
+        (is (nil? (typed/route-for root flow)))
+        (is (= {flow "Field Core Secondary"} (typed/metaflow-identities root)))
+        (is (= attempt (typed/attempt-by-id root "attempt-1")))))))
+
+(deftest removing-a-pre-name-attribute-route-preserves-its-explicit-metadata
+  (let [root (str (fs/create-temp-dir {:prefix "hm-name-removal-"}))
+        route {:session "s" :name "native" :pane_id "p" :terminal_id "t"
+               :agent "codex" :native_thread "00000000-0000-0000-0000-000000000001"
+               :aspect "Mind" :topic "Core" :layer "Primary"}]
+    (try
+      (typed/put-route! root "prior" route)
+      (typed/transact! root [[:db/retract [:flow/id "prior"] :flow/metaflow "Mind Core Primary"]])
+      (is (empty? (typed/metaflow-identities root)))
+      (typed/remove-route! root "prior")
+      (is (= {"prior" "Mind Core Primary"} (typed/metaflow-identities root)))
+      (is (nil? (typed/route-for root "prior")))
+      (finally (fs/delete-tree root)))))

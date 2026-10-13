@@ -1,7 +1,7 @@
 # messenger-clj
 
 `messenger-clj` is the standalone Clojure command line messenger for live Flow
-routes in Herdr. It resolves a Flow ID to its registered pane, checks the route
+routes in Herdr. It resolves a three-field metaflow name to its registered pane, checks the route
 and native harness identity, and submits each durable envelope once.
 
 The public compatibility commands remain available:
@@ -22,17 +22,17 @@ ledger. There is no Python runtime fallback.
 Machine prose is tagged EDN:
 
 ```clojure
-#msg ["FLOW_ID" "text"]
+#msg ["Mind Core Primary" "text"]
 ```
 
-The vector contains the sender Flow ID and the message text. Time, recipient,
+The vector contains the sender metaflow name and the message text. Time, recipient,
 harness kind, route identity, delivery attempts, pending messages, and
 retirements stay in the typed ledger.
 
 Living words use a separate variant:
 
 ```clojure
-#psyche ["FLOW_ID" "context" "whole verbatim"]
+#psyche ["Mind Core Primary" "context" "whole verbatim"]
 ```
 
 Each `#psyche` submission is one envelope containing the sender, context, and
@@ -46,11 +46,12 @@ does not change the submitted envelope or ledger record.
 Several living records can travel in one tagged envelope:
 
 ```clojure
-#psyches [["FLOW_ID" "first context" "first whole verbatim"]
-          ["FLOW_ID" "second context" "second whole verbatim"]]
+#psyches [["Mind Core Primary" "first context" "first whole verbatim"]
+          ["Mind Core Primary" "second context" "second whole verbatim"]]
 ```
 
-The sender is derived once from `FLOW_ID` and placed into every record. The
+The sender name is resolved once from the harness-inherited internal `FLOW_ID`
+and its registration, then placed into every record. The
 stdin payload is an EDN vector of `[context verbatim]` pairs, so callers cannot
 supply a different sender for an entry. Each context and verbatim remains its
 own complete string.
@@ -77,18 +78,17 @@ During development, the Bash launcher runs Babashka against the source tree:
 
 ```sh
 bin/messenger-clj --help
-FLOW_ID=<self> bin/messenger-clj send TARGET 'text'
-FLOW_ID=<self> bin/messenger-clj send TARGET --psyche 'why these words matter' 'verbatim words'
-printf '%s' 'multiline body' | FLOW_ID=<self> bin/messenger-clj send TARGET --stdin
-printf '%s' '[["context" "whole verbatim"]]' | FLOW_ID=<self> bin/messenger-clj send TARGET --psyches --stdin
+bin/messenger-clj send "Psyche Core Secondary" 'text'
+bin/messenger-clj send "Psyche Core Secondary" --psyche 'why these words matter' 'verbatim words'
+printf '%s' 'multiline body' | bin/messenger-clj send "Psyche Core Secondary" --stdin
+printf '%s' '[["context" "whole verbatim"]]' | bin/messenger-clj send "Psyche Core Secondary" --psyches --stdin
 ```
 
-`hm-retire FLOW` retires one registered Flow from the typed route and live
-Herdr state alone. It writes the evidence file under
-`<state root>/retirement-evidence/` and prints its path and SHA-256. It refuses
-with `RetireRefused.{ FLOW Reason }`, where Reason is `UnknownFlow`,
-`AlreadyRetired`, `PaneNotFound`, `PaneAmbiguous`, `IdentityChanged`,
-`NativeMismatch`, `NoNativeIdentity`, or `RouteHold`, and then nothing changes.
+`hm-retire "Aspect Topic Layer"` retires the current registered seat after the
+existing exact live/native checks. Its public receipt names the metaflow.
+Exact binding, native identity, evidence path and SHA remain in the typed
+retirement record. Refusals retain their reason, such as `PaneNotFound` or
+`NativeMismatch`, and name the metaflow rather than an internal key.
 
 `--stdin` reads the complete standard input as the machine body or, with
 `--psyche CONTEXT`, as that record's verbatim. `--psyches --stdin` reads the
@@ -105,7 +105,7 @@ The Nix package is built with [clj-build](https://github.com/LiGoldragon/clj-bui
 `bb.edn` doubles as the `deps.edn` that clj-build resolves once in a
 fixed-output derivation; everything after that runs offline. The package holds a
 Babashka uberjar built from `src/` in Nix, the pinned Datalevin pod 0.8.25,
-`messenger-clj`, and the nine `hm-*` command links. No build product is
+`messenger-clj`, and the ten `hm-*` command links. No build product is
 committed: the uberjar exists only as the output of the current source. The
 build lives in `nix/`; `flake.nix` only indexes it.
 
@@ -132,7 +132,7 @@ JSON state are retained only as frozen migration inputs.
 
 The installed launcher and this source select the typed state root
 `~/.local/state/messenger-clj`. Deployment replaces the package target behind
-all nine `hm-*` aliases atomically and does not move or rewrite that database.
+all ten `hm-*` aliases atomically and does not move or rewrite that database.
 
 Concurrent operations use unique Orchestrate lock names against the same state
 path. A competing operation waits for that path lock for a bounded interval;
@@ -142,7 +142,7 @@ timeout refuses before a prompt or ledger write.
 
 ```sh
 bb --config bb.edn -e \
-  '(require '\''messenger-clj.core-test '\''messenger-clj.cli-test '\''messenger-clj.typed-store-test '\''messenger-clj.legacy-import-test) (apply clojure.test/run-tests ['\''messenger-clj.core-test '\''messenger-clj.cli-test '\''messenger-clj.typed-store-test '\''messenger-clj.legacy-import-test])'
+  '(require '\''messenger-clj.core-test '\''messenger-clj.public-test '\''messenger-clj.cli-test '\''messenger-clj.typed-store-test '\''messenger-clj.legacy-import-test) (apply clojure.test/run-tests ['\''messenger-clj.core-test '\''messenger-clj.public-test '\''messenger-clj.cli-test '\''messenger-clj.typed-store-test '\''messenger-clj.legacy-import-test])'
 ```
 
 Set `MESSENGER_CLJ_DATALEVIN_POD` to a Datalevin 0.8.25 `dtlv` to use the
@@ -151,28 +151,67 @@ temporary Datalevin stores. It never sends to a live route, but one core test
 takes a Lock through the `orchestrate` on `PATH`.
 
 
-## Registered metaflow names
+## Public identity contract
 
-Send to a quoted `"Aspect Topic Layer"`, for example
-`FLOW_ID=<internal-id> hm-send "Psyche Core Secondary" --stdin`.
-The displayed origin in every live `#msg`, `#psyche`, and `#psyches` send
-is the sender registration's `aspect topic layer`, with single spaces.
-Internal flow IDs remain transport and audit keys, and remain accepted as
-TARGET. Dotted names are not aliases. Names never come from a model, native
-UUID, terminal title, or guessed layer.
+Every flow-facing identity argument is one quoted `"Aspect Topic Layer"`.
+`hm-send`, `hm-send-abrupt`, `hm-register`, `hm-repair`, `hm-deregister`,
+`hm-rebind`, `hm-move`, `hm-retire` and the corresponding `messenger-clj`
+operations reject internal IDs and dotted names. `hm-list` and
+`hm-heartbeat-state` emit metaflow names, not internal keys or native UUIDs.
+The current lookup owner is **messenger-clj's existing typed registry**;
+this does not claim that native Flow Nexus already owns the mapping.
 
-Account for each existing seat's metadata explicitly with its normal exact
-registration: `hm-register ID NAME --session SESSION --native-thread UUID
---aspect ASPECT --topic TOPIC --layer LAYER`. Supply all three fields together;
-ordinary re-registration without these flags preserves already stored fields.
-Old registrations remain readable, but sending without complete metadata
-refuses. An unregistered sender also refuses; there is no invented origin or
-fallback to its internal ID. A missing or ambiguous named target refuses.
-Registration still validates the same live native identity; metadata does
-not replace transport, retirement, or receiving readiness checks.
+The data anatomy is a public `Metaflow` (aspect, topic, layer), an internal
+registry key, and an exact native `RouteBinding`. A public name resolves to
+one current registered binding under the same reservation as the operation.
+Missing or ambiguous targets refuse before delivery. A stale native route
+still encounters the existing delivery/repair guards. Historical identity
+names survive route removal in `flow/metaflow`; a current binding takes
+precedence over history, while ambiguous history is never guessed. Existing
+unnamed retired records stay intact and are reported as metadata unavailable.
+No title, model, native UUID substring or legacy name supplies metadata.
 
-Envelope readers retain historical ID-bearing records as data. Psyche context
-and verbatim bytes are unchanged. Deployment must register qualified metadata
-before enabling new sends, preserve the typed-store backup and old pinned
-package, and witness a real registered sender/recipient envelope. Do not
-infer this native proof from tests or a successful package build.
+First registration is `hm-register "Field Topic Quaternary" HERDR_NAME
+--session SESSION --native-thread UUID`. The launcher supplies its actual
+claimed identity through the runtime-only `HM_REGISTRATION_FLOW_ID`
+environment entry; a flow never passes that key as an argument. The normal
+`FLOW_ID` inherited from the sender harness remains an internal audit/lock
+input. Existing named registrations need no bootstrap key. Optional
+`--aspect`, `--topic`, and `--layer` flags must exactly equal the public name.
+The same live native route, cross-registration and retirement checks still
+run. A different active key for the same name refuses; replacement removes
+or retires the old binding normally before registering the new one. A stale
+`HM_REGISTRATION_FLOW_ID` does not override a current name.
+
+Exact binding options to repair/deregister/rebind/move remain required;
+these are native transport evidence, not alternate public flow identifiers.
+Historical retirement import requires an already accounted named registry
+identity; it refuses an unidentified old record instead of inventing one.
+JSON import keeps internal IDs in its private historical receipt, while its
+public summary reports counts. Old ID-bearing envelopes remain readable
+history; a pending old-origin envelope cannot be replayed as a new send.
+
+The three live envelope variants use the sender registration's space-separated
+name. An unregistered sender or one missing metadata refuses. Message and
+psyche payloads pass unchanged; identity conversion never rewrites payloads.
+Delivery receipts retain `Transported`, `Presented`, `Held`, and `Uncertain`;
+uncertainty still forbids a blind retry. Full runtime causes and internal
+attempt/binding records remain separate from public identities.
+
+## Declarative deployment boundary
+
+Field updates the immutable Home package and all default entrypoints together,
+with source/JAR parity and typed-store preservation. Launcher-owned bootstrap
+calls must change from an ID argument to a public name plus the scoped runtime
+registration environment. Sender hooks must use their actual registered
+committer name; do not leave ID-based callers on a name-only package. Qualify
+all actual sending registrations and the current sole publisher before
+activation. Internal historical IDs and old package/store evidence remain.
+One registered name-to-name send and the actual received envelope witness
+are required after declaration/activation; tests alone do not prove it.
+
+The additive registry name attribute does not rewrite historical attempts,
+retirements or route keys. Keep the previous immutable package for supported
+backout; it ignores the additional identity attribute. No store deletion,
+retired-seat wake, new identity allocation or global enrollment is performed
+by this change.

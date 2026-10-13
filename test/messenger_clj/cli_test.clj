@@ -77,7 +77,7 @@
     (.setExecutable (java.io.File. (str orchestrate)) true)
     {:root root :tools tools :prompt-log prompt-log :prompt-server prompt-server
      :environment {"PATH" (str tools ":" (System/getenv "PATH"))
-                   "HM_REGISTRY" root "HM_PRIMARY_ROOT" root "FLOW_ID" "sender"
+                   "HM_REGISTRY" root "HM_PRIMARY_ROOT" root "FLOW_ID" "sender" "HM_REGISTRATION_FLOW_ID" "00f95a"
                    "XDG_CONFIG_HOME" config-home
                    "FAKE_HERDR_PROMPT_LOG" prompt-log}}))
 
@@ -89,9 +89,9 @@
     (let [{:keys [root tools prompt-server environment]} (fake-herdr-environment)
           env (assoc environment "FAKE_HERDR_WAIT" wait-result)]
       (try
-        (is (zero? (:exit (invoke env "hm-register" "00f95a" "Mind Sol 00f95a"
+        (is (zero? (:exit (invoke env "hm-register" "Field Core Secondary" "Mind Sol 00f95a"
                                   "--session" "s" "--native-thread" native-thread))))
-        (let [sent (invoke env "hm-send" "00f95a" (str "wait-" wait-result) "--wait-presented")
+        (let [sent (invoke env "hm-send" "Field Core Secondary" (str "wait-" wait-result) "--wait-presented")
               attempts (store/attempts-for root "00f95a")]
           (is (= expected-exit (:exit sent)) (str wait-result ": " (:err sent)))
           (is (str/includes? (str (:out sent) (:err sent)) (name expected-grade)))
@@ -111,7 +111,7 @@
   (doseq [agent-session ["absent" "malformed"]]
     (let [{:keys [root tools prompt-server environment]} (fake-herdr-environment)
           result (invoke (assoc environment "FAKE_HERDR_AGENT_SESSION" agent-session)
-                         "hm-register" "00f95a" "Mind Sol 00f95a" "--session" "s")]
+                         "hm-register" "Field Core Secondary" "Mind Sol 00f95a" "--session" "s")]
       (try
         (is (not (zero? (:exit result))) agent-session)
         (is (nil? (store/route-for root "00f95a")) agent-session)
@@ -144,7 +144,7 @@
         environment {"PATH" (str tools ":" (System/getenv "PATH"))
                      "HM_REGISTRY" root
                      "HM_PRIMARY_ROOT" root
-                     "FLOW_ID" "sender"
+                     "FLOW_ID" "sender" "HM_REGISTRATION_FLOW_ID" "00f95a"
                      "XDG_CONFIG_HOME" config-home
                      "FAKE_HERDR_STATE" state
                      "FAKE_HERDR_PROMPT_LOG" (str (fs/path root "unused-prompts.edn"))}]
@@ -155,27 +155,25 @@
       (.setExecutable (java.io.File. (str herdr)) true)
       (.setExecutable (java.io.File. (str orchestrate)) true)
 
-      (let [registered (invoke environment "hm-register" "00f95a" "Mind Sol 00f95a"
+      (let [registered (invoke environment "hm-register" "Field Core Secondary" "Mind Sol 00f95a"
                                "--session" "s" "--native-thread" native-thread
                                "--aspect" "Field" "--topic" "Core" "--layer" "Secondary")]
         (is (zero? (:exit registered)) (:err registered))
-        (is (str/includes? (:out registered) "Registered 00f95a")))
+        (is (str/includes? (:out registered) "Registered.{ «Field Core Secondary» }")))
       (let [listed (invoke environment "hm-list")]
         (is (zero? (:exit listed)) (:err listed))
-        (is (str/includes? (:out listed) "00f95a\tMind Sol 00f95a\ts\tworking")))
+        (is (str/includes? (:out listed) "Field Core Secondary\ts\tworking")))
       (let [snapshot (invoke environment "hm-heartbeat-state")
             value (json/parse-string (:out snapshot) true)]
         (is (zero? (:exit snapshot)) (:err snapshot))
-        (is (= 1 (:version value)))
-        (is (= [{:flow "00f95a"
-                 :route {:session "s" :name "Mind Sol 00f95a" :pane_id "p" :terminal_id "t"
-                         :agent "codex" :native_thread native-thread :state "Bound"
-                         :aspect "Field" :topic "Core" :layer "Secondary"}}]
+        (is (= 2 (:version value)))
+        (is (= [{:metaflow "Field Core Secondary" :state "Bound" :session "s"
+                 :harness "codex" :held false :transition false}]
                (:routes value)))
         (is (= [] (:retirements value))))
       (let [sent (invoke environment "hm-send" "Field Core Secondary" "isolated-success")]
         (is (zero? (:exit sent)) (:err sent))
-        (is (str/includes? (:out sent) "Transported.{ 00f95a working }"))
+        (is (str/includes? (:out sent) "Transported.{ «Field Core Secondary» working }"))
         (is (some #(= :Submitting (:reason %)) (store/attempts-for root "00f95a"))))
       (let [short-body "one\ntwo\nλ"
             long-body (str "line 1 \\\"quoted\\\" \\\\ path\n" (apply str (repeat 36000 "λ🙂"))
@@ -188,10 +186,10 @@
                                   "Quoted: \\\"Clojure\\\"; path: \\\\source\\file\n"
                                   (apply str (repeat 30000 "δ🙂")))]]
             plural-input (pr-str plural-records)
-            short-send (invoke-input environment short-body "hm-send" "00f95a" "--stdin")
-            long-send (invoke-input environment long-body "hm-send" "00f95a" "--stdin")
-            psyche-send (invoke-input environment verbatim "hm-send" "00f95a" "--psyche" context "--stdin")
-            psyches-send (invoke-input environment plural-input "hm-send" "00f95a" "--psyches" "--stdin")
+            short-send (invoke-input environment short-body "hm-send" "Field Core Secondary" "--stdin")
+            long-send (invoke-input environment long-body "hm-send" "Field Core Secondary" "--stdin")
+            psyche-send (invoke-input environment verbatim "hm-send" "Field Core Secondary" "--psyche" context "--stdin")
+            psyches-send (invoke-input environment plural-input "hm-send" "Field Core Secondary" "--psyches" "--stdin")
             envelopes (mapv #(get-in % [:params :text]) @(:requests prompt-server))
             values (mapv read-string envelopes)
             attempts (store/attempts-for root "00f95a")]
@@ -229,54 +227,54 @@
           (is (= #{:Submitting :sent} (set (map :reason plural-attempts))))
           (is (every? #(= plural-input (:body %)) plural-attempts))
           (is (every? #(= (nth envelopes 4) (:submitted %)) plural-attempts))))
-      (let [moved (invoke environment "hm-move" "00f95a" "w2"
+      (let [moved (invoke environment "hm-move" "Field Core Secondary" "w2"
                           "--session" "s" "--pane-id" "p" "--terminal-id" "t"
                           "--name" "Mind Sol 00f95a" "--agent" "codex"
                           "--native-thread" native-thread "--process-pid" "123")]
         (is (zero? (:exit moved)) (:err moved))
         (is (= "m" (:pane_id (store/route-for root "00f95a")))))
-      (let [deregistered (invoke environment "hm-deregister" "00f95a"
+      (let [deregistered (invoke environment "hm-deregister" "Field Core Secondary"
                                  "--session" "s" "--pane-id" "m" "--terminal-id" "t"
                                  "--name" "Mind Sol 00f95a")]
         (is (zero? (:exit deregistered)) (:err deregistered)))
       (let [held (invoke (assoc environment "FAKE_HERDR_AGENT_LIST" "empty")
-                         "hm-send" "00f95a" "isolated-held" "--hold-seconds" "0")]
+                         "hm-send" "Field Core Secondary" "isolated-held" "--hold-seconds" "0")]
         (is (= 1 (:exit held)))
-        (is (str/includes? (:err held) "Held.{ 00f95a RepairRequired"))
-        (is (= "isolated-held" (:message (first (store/pending-for root "00f95a"))))))
+        (is (str/includes? (:err held) "TargetNotRegistered: Field Core Secondary"))
+        (is (empty? (store/pending-for root "00f95a")) "No named route exists to receive or hold this send"))
 
-      (let [registered (invoke environment "hm-register" "00f95a" "Mind Sol 00f95a"
+      (let [registered (invoke environment "hm-register" "Field Core Secondary" "Mind Sol 00f95a"
                                "--session" "s" "--native-thread" native-thread)]
         (is (zero? (:exit registered)) (:err registered)))
-      (let [extra (invoke environment "hm-retire" "00f95a" "--session" "s")]
+      (let [extra (invoke environment "hm-retire" "Field Core Secondary" "--session" "s")]
         (is (= 2 (:exit extra)))
-        (is (str/includes? (:err extra) "retire takes only the flow id")))
-      (let [unknown (invoke environment "hm-retire" "abcdef")]
+        (is (str/includes? (:err extra) "retire takes only the metaflow name")))
+      (let [unknown (invoke environment "hm-retire" "Mind Missing Primary")]
         (is (= 1 (:exit unknown)))
-        (is (str/includes? (:err unknown) "RetireRefused.{ abcdef UnknownFlow }")))
-      (let [gone (invoke (assoc environment "FAKE_HERDR_AGENT_LIST" "empty") "hm-retire" "00f95a")]
+        (is (str/includes? (:err unknown) "TargetNotRegistered: Mind Missing Primary")))
+      (let [gone (invoke (assoc environment "FAKE_HERDR_AGENT_LIST" "empty") "hm-retire" "Field Core Secondary")]
         (is (= 1 (:exit gone)))
-        (is (str/includes? (:err gone) "RetireRefused.{ 00f95a PaneNotFound }"))
+        (is (str/includes? (:err gone) "RetireRefused.{ «Field Core Secondary» PaneNotFound }"))
         (is (some? (store/route-for root "00f95a"))))
-      (let [retired (invoke environment "hm-retire" "00f95a")
+      (let [retired (invoke environment "hm-retire" "Field Core Secondary")
             marker (store/retirement-for root "00f95a")
             path (get-in marker [:evidence :path])]
         (is (zero? (:exit retired)) (:err retired))
-        (is (str/includes? (:out retired) (str "evidence " path)))
+        (is (str/includes? (:out retired) "Retired.{ «Field Core Secondary» }"))
         (is (str/starts-with? path (str (fs/path root "retirement-evidence"))))
         (is (= (hm/sha256 path) (get-in marker [:evidence :sha256])))
         (is (= {:session "s" :name "Mind Sol 00f95a" :pane_id "m" :terminal_id "t" :agent "codex"} (:record marker)))
         (is (= native-thread (:native_thread marker)))
         (is (= "sender" (:retired_by marker)))
-        (let [again (invoke environment "hm-retire" "00f95a")]
+        (let [again (invoke environment "hm-retire" "Field Core Secondary")]
           (is (= 1 (:exit again)))
-          (is (str/includes? (:err again) "RetireRefused.{ 00f95a AlreadyRetired }")))
+          (is (str/includes? (:err again) "RetireRefused.{ «Field Core Secondary» AlreadyRetired }")))
         (is (nil? (store/route-for root "00f95a")))
         (let [snapshot (invoke environment "hm-heartbeat-state")
               value (json/parse-string (:out snapshot) true)]
           (is (zero? (:exit snapshot)) (:err snapshot))
-          (is (= ["sender"] (mapv :flow (:routes value))))
-          (is (= ["00f95a"] (mapv :flow (:retirements value)))))
+          (is (= ["Mind Tests Primary"] (mapv :metaflow (:routes value))))
+          (is (= ["Field Core Secondary"] (mapv :metaflow (:retirements value)))))
         (is (empty? (fs/glob root "**/*.edn"))
             "operational commands create no EDN authority files"))
       (finally
@@ -284,3 +282,24 @@
         (fs/delete-tree root)
         (fs/delete-tree config-home)
         (fs/delete-tree tools)))))
+
+(deftest public-wrapper-entrypoints-refuse-id-targets-before-native-or-store-effects
+  (let [{:keys [root tools prompt-server environment]} (fake-herdr-environment)]
+    (try
+      (doseq [[wrapper args]
+              [["hm-send" ["00f95a" "body"]]
+               ["hm-send-abrupt" ["00f95a" "body"]]
+               ["hm-register" ["00f95a" "agent" "--session" "s"]]
+               ["hm-repair" ["00f95a" "--pending-id" "attempt" "--session" "s" "--pane-id" "p" "--terminal-id" "t" "--name" "agent" "--agent" "codex"]]
+               ["hm-deregister" ["00f95a" "--session" "s" "--pane-id" "p" "--terminal-id" "t" "--name" "agent"]]
+               ["hm-rebind" ["00f95a" "new" "--old-name" "old" "--session" "s" "--pane-id" "p" "--terminal-id" "t" "--agent" "codex" "--native-thread" native-thread]]
+               ["hm-move" ["00f95a" "w2" "--session" "s" "--pane-id" "p" "--terminal-id" "t" "--name" "agent" "--agent" "codex" "--native-thread" native-thread "--process-pid" "123"]]
+               ["hm-retire" ["00f95a"]]
+               ["messenger-clj" ["import-retirement" "00f95a" "--session" "s" "--pane-id" "p" "--terminal-id" "t" "--name" "agent" "--agent" "codex" "--native-thread" native-thread "--evidence" "/not-opened" "--evidence-sha256" "unused"]]]]
+        (let [result (apply invoke environment wrapper args)]
+          (is (= 1 (:exit result)) (str wrapper ": " (:err result)))
+          (is (str/includes? (:err result) "MetaflowRequired") wrapper)
+          (is (not (str/includes? (:err result) "00f95a")) wrapper)))
+      (is (empty? @(:requests prompt-server)))
+      (is (nil? (store/route-for root "00f95a")))
+      (finally ((:close! prompt-server)) (fs/delete-tree root) (fs/delete-tree tools)))))

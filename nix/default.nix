@@ -18,7 +18,7 @@ in {
   tests = (clj.mkCljChecks pkgs {
     name = "messenger-clj";
     src = testSource;
-    tests = [ "messenger-clj.core-test" "messenger-clj.cli-test" "messenger-clj.typed-store-test" "messenger-clj.legacy-import-test" ];
+    tests = [ "messenger-clj.core-test" "messenger-clj.public-test" "messenger-clj.cli-test" "messenger-clj.typed-store-test" "messenger-clj.legacy-import-test" ];
     runtime = "bb";
     inherit deps;
     nativeBuildInputs = [ orchestrateStub ];

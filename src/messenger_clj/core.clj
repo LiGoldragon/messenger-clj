@@ -612,8 +612,9 @@
           (when-not (= 1 (count hits))
             (fail (if (empty? hits) "Repair candidate is no longer live and exact"
                       "Repair candidate is ambiguous")))
-          (let [route (or (checked-repair-candidate (first hits))
-                          (fail "Repair candidate identity or official agent_session changed"))
+          (let [route (merge (select-keys existing [:aspect :topic :layer])
+                             (or (checked-repair-candidate (first hits))
+                                 (fail "Repair candidate identity or official agent_session changed")))
                 _ (assert-native-not-retired! (:native_thread route) flow)
                 _ (when (some #(and (not= flow (key %)) (same-stable-route? route (val %)))
                               (route-records))
