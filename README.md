@@ -215,3 +215,25 @@ retirements or route keys. Keep the previous immutable package for supported
 backout; it ignores the additional identity attribute. No store deletion,
 retired-seat wake, new identity allocation or global enrollment is performed
 by this change.
+
+## Transition and held delivery
+
+A transition-marked registration can send its handover. Transition still
+holds incoming messages; retirement, missing metadata, NeedsBinding and
+route-repair holds remain guards on the sender.
+
+Every new held message retains the exact submitted envelope, including its
+original registered sender name, variant, context and verbatim payload.
+`hm-repair` can release a held message after the existing exact live-route
+checks pass and receiver transition/route holds are cleared. It submits the
+saved envelope, never one rebuilt from the releasing seat or current sender
+metadata. Retained historical rows without a qualified envelope are refused,
+not supplied a guessed sender.
+
+Pending messages are read in persisted enqueue-entity order under the normal
+registry reservation, not random UUID or wall-clock order. Releasing any item
+except the oldest for its receiver returns `PendingOrder` before route changes
+or prompting. Consumption and the pre-prompt attempt remain one transaction;
+an uncertain submission is not automatically replayed. This is ordering of
+stored enqueue events, not a claim to reconstruct arrival times lost before
+historical imports, nor a new automatic queue-draining service.

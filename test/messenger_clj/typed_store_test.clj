@@ -161,3 +161,25 @@
       (is (= {"prior" "Mind Core Primary"} (typed/metaflow-identities root)))
       (is (nil? (typed/route-for root "prior")))
       (finally (fs/delete-tree root)))))
+
+(deftest pending-order-is-persisted-enqueue-order-not-uuid-or-clock-order
+  (with-temp-store
+    (fn [root]
+      (let [first-attempt (assoc attempt :id "z-first" :at "2030-01-01T00:00:00Z")
+            second-attempt (assoc attempt :id "a-second" :at "2020-01-01T00:00:00Z")
+            pending (mapv #(hash-map :attempt % :message (:id %) :state "held")
+                          [first-attempt second-attempt])
+            submission (assoc attempt :id "submission" :grade :Uncertain :reason :Submitting)]
+        (doseq [p pending]
+          (typed/put-attempt! root (:attempt p))
+          (typed/put-pending! root p))
+        ;; Each typed-store call reopens the database; order is durable.
+        (is (= pending (typed/pending-for root flow)))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"PendingOrder"
+                             (typed/take-pending-with-attempt! root "a-second" submission)))
+        (is (nil? (typed/attempt-by-id root "submission")))
+        (is (= pending (typed/pending-for root flow)))
+        (typed/take-pending-with-attempt! root "z-first" submission)
+        (is (= [(second pending)] (typed/pending-for root flow)))
+        (typed/take-pending-with-attempt! root "a-second" (assoc submission :id "submission-2"))
+        (is (empty? (typed/pending-for root flow)))))))

@@ -1022,3 +1022,67 @@
       (is (thrown-with-msg? Exception #"LegacyPendingOrigin"
                            (hm/live-pending-origin! (:variant request) legacy)))
       (is (nil? (hm/live-pending-origin! (:variant request) current))))))
+
+(deftest transition-holds-incoming-work-but-allows-the-senders-handover
+  (let [root-path (str (fs/create-temp-dir {:prefix "hm-transition-sender-"}))
+        prompts (atom [])
+        live (herdr-agent {:pane_id "p" :terminal_id "t" :agent "codex"})
+        transport (fallback-transport "s" {"p" live} ["codex"] prompts)]
+    (try
+      (binding [hm/*root* root-path hm/*flow-id* "sender"
+                hm/*with-reservation* pass-reservation hm/*transport* transport]
+        (seed-sender! root-path)
+        (persist-route! root-path route)
+        (doseq [transition [{:transition true} {:state "transition"}]]
+          (seed-sender! root-path)
+          (store/put-route! root-path "sender"
+                            (merge (store/route-for root-path "sender") transition))
+          (is (= "Transported.{ 00f95a idle }"
+                 (hm/send! "00f95a" "handover" false nil))))
+        (is (= ["#msg [\"Mind Tests Primary\" \"handover\"]"
+                "#msg [\"Mind Tests Primary\" \"handover\"]"]
+               (mapv :envelope @prompts)))
+        (doseq [guard [{:state "NeedsBinding"} {:route_hold "unqualified"}]]
+          (seed-sender! root-path)
+          (store/put-route! root-path "sender"
+                            (merge (store/route-for root-path "sender") guard))
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"SenderBindingUnavailable"
+                               (hm/send! "00f95a" "must not send" false nil))))
+        (is (= 2 (count @prompts))))
+      (finally (fs/delete-tree root-path)))))
+
+(deftest held-variants-release-the-original-envelopes-in-arrival-order
+  (let [root-path (str (fs/create-temp-dir {:prefix "hm-held-envelopes-"}))
+        prompts (atom [])
+        live (herdr-agent {:pane_id "p" :terminal_id "t" :agent "codex"})
+        transport (fallback-transport "s" {"p" live} ["codex"] prompts)
+        requests [{:variant :msg :body "first\nλ"}
+                  {:variant :psyche :context " original context " :body " second\nverbatim "}
+                  {:variant :psyches :body "[ [\"third context\" \" third \"]\n [\"fourth\" \"λ\"] ]"}]
+        expected (mapv #(hm/message-envelope "Mind Tests Primary" %) requests)]
+    (try
+      (binding [hm/*root* root-path hm/*flow-id* "sender"
+                hm/*with-reservation* pass-reservation hm/*transport* transport]
+        (seed-sender! root-path)
+        (persist-route! root-path (assoc route :transition true))
+        (doseq [request requests]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"InTransition"
+                               (hm/send-request! "00f95a" request false nil))))
+        (let [pending (store/pending-for root-path "00f95a")
+              ids (mapv #(get-in % [:attempt :id]) pending)]
+          (is (= expected (mapv #(get-in % [:attempt :submitted]) pending)))
+          (is (empty? @prompts))
+          ;; The releaser and current sender metadata must not replace saved origins.
+          (store/put-route! root-path "sender"
+                            (assoc (store/route-for root-path "sender") :topic "Changed"))
+          (persist-route! root-path route)
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"PendingOrder"
+                               (hm/repair! "00f95a" (last ids) "s" "p" "t" (:name live) "codex")))
+          (is (= pending (store/pending-for root-path "00f95a")))
+          (is (empty? @prompts))
+          (doseq [id ids]
+            (is (= "Transported.{ 00f95a idle }"
+                   (hm/repair! "00f95a" id "s" "p" "t" (:name live) "codex"))))
+          (is (= expected (mapv :envelope @prompts)))
+          (is (empty? (store/pending-for root-path "00f95a")))))
+      (finally (fs/delete-tree root-path)))))

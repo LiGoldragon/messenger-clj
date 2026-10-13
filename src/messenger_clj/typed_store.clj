@@ -334,23 +334,28 @@
                         :in $ ?id ?pattern :where [?pending :pending/id ?id]]
                  id pending-pull)
           (one! "pending intent" id) pulled-pending!))
+(defn pending-for [root flow]
+  (->> (checked-rows!
+        (query root '[:find ?pending (pull ?pending ?pattern)
+                      :in $ ?flow ?pattern
+                      :where [?f :flow/id ?flow] [?attempt :attempt/flow ?f]
+                      [?pending :pending/attempt ?attempt]]
+               flow pending-pull)
+        2)
+       ;; Entity allocation records enqueue order under the registry reservation.
+       ;; UUIDs and wall-clock timestamps do not establish arrival order.
+       (sort-by first) (map (comp pulled-pending! second)) vec))
 (defn take-pending-with-attempt! [root id attempt]
   (let [attempt (attempt! attempt)
         pending-id (query root '[:find ?pending . :in $ ?id
                                  :where [?pending :pending/id ?id]] id)]
     (when-not pending-id
       (throw (ex-info "Pending intent is absent or already submitted" {:pending/id id})))
+    (when-not (= id (get-in (first (pending-for root (:flow attempt))) [:attempt :id]))
+      (throw (ex-info "PendingOrder: release the oldest held message first" {:pending/id id})))
+    ;; The caller holds the registry reservation through this transaction and prompt.
     (transact! root (vec (concat [[:db/retractEntity pending-id]] (attempt-tx attempt))))
     attempt))
-(defn pending-for [root flow]
-  (->> (checked-rows!
-        (query root '[:find (pull ?pending ?pattern)
-                      :in $ ?flow ?pattern
-                      :where [?f :flow/id ?flow] [?attempt :attempt/flow ?f]
-                      [?pending :pending/attempt ?attempt]]
-               flow pending-pull)
-        1)
-       (map (comp pulled-pending! first)) (sort-by #(get-in % [:attempt :id])) vec))
 
 (defn put-retirement! [root retirement]
   (let [retirement (retirement! retirement) record (:record retirement)

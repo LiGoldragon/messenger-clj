@@ -498,10 +498,8 @@
 (defn held! [flow reason request route]
   (let [route (when (and route (m/validate RouteBinding route)) route)
         {:keys [variant context body]} (request! request)
-        repair-envelope (when (= reason :RepairRequired)
-                          (message-envelope (sender-origin!)
-                                            request))
-        attempt (append-attempt! flow reason :Held route request repair-envelope)
+        envelope (message-envelope (sender-origin!) request)
+        attempt (append-attempt! flow reason :Held route request envelope)
         pending (valid! PendingIntent
                         (cond-> {:attempt attempt :message body :variant variant :state "held"}
                           (contains? request :context) (assoc :context context))
@@ -527,7 +525,8 @@
     (assert-not-retired! sender)
     (let [route (load-route (registry) sender)]
       (when-not route (fail "SenderNotRegistered: register the sender with explicit metaflow metadata"))
-      (when (or (needs-binding? route) (in-transition? route) (:route_hold route))
+      ;; Transition holds incoming work; the existing seat must still send its handover.
+      (when (or (needs-binding? route) (:route_hold route))
         (fail "SenderBindingUnavailable: sender registration is not usable"))
       (metaflow! route))))
 (defn target-flow! [target]
@@ -602,8 +601,10 @@
       (let [pending (store/pending-by-id (root) pending-id)
             existing (load-route (registry) flow)]
         (when-not (and pending (= flow (get-in pending [:attempt :flow]))
-                       (= :RepairRequired (get-in pending [:attempt :reason])))
+                       (= :Held (get-in pending [:attempt :grade])))
           (fail "Repair pending intent is absent, already submitted, or belongs to another Flow"))
+        (when-not (= pending-id (get-in (first (store/pending-for (root) flow)) [:attempt :id]))
+          (fail "PendingOrder: release the oldest held message first"))
         (when (:route_hold existing) (fail "RouteHold"))
         (when (in-transition? existing) (fail "InTransition"))
         (let [expected {:session session :pane_id pane-id :terminal_id terminal-id
@@ -632,7 +633,10 @@
                                                          (read-psyches-message envelope)))}
                            :msg (let [[_ body] (read-pane-message envelope)]
                                   {:variant :msg :body body})))
-                _ (when-not (= (select-keys request [:variant :context :body]) parsed)
+                expected (cond-> (select-keys request [:variant :context :body])
+                           (= :psyches (:variant request))
+                           (update :body #(pr-str (read-psyches-input %))))
+                _ (when-not (= expected parsed)
                     (fail "Repair pending envelope is missing or differs from the held message"))
                 _ (live-pending-origin! (:variant request) envelope)
                 _ (prompt-request! route envelope false)
