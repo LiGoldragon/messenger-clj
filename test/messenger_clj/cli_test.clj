@@ -62,6 +62,17 @@
       {:requests requests :server server :worker worker
        :close! (fn [] (.close server) (deref worker 5000 nil))})))
 
+(defn install-fake-flow! [tools]
+  (let [flow (fs/path tools "flow")]
+    ;; test-source.nix qualifies this bash shebang to the store interpreter.
+    (spit (str flow) "#!/usr/bin/env bash\nprintf 'Current.Unknown\\n'\n")
+    (.setExecutable (java.io.File. (str flow)) true)
+    (let [reply (shell {:out :string :err :string :continue true}
+                       (str flow) "Current.{ Field Core Secondary }")]
+      (is (= 0 (:exit reply)) (:err reply))
+      (is (= "Current.Unknown" (str/trim (:out reply)))))
+  nil)
+
 (defn fake-herdr-environment []
   (let [root (str (fs/create-temp-dir {:prefix "hm-cli-presented-"}))
         tools (fs/create-temp-dir {:prefix "hm-cli-presented-tools-"})
@@ -69,11 +80,9 @@
         config-home (str (fs/path root "config"))
         prompt-server (fake-prompt-server config-home)
         herdr (fs/path tools "herdr")
-        orchestrate (fs/path tools "orchestrate")
-        flow (fs/path tools "flow")]
+        orchestrate (fs/path tools "orchestrate")]
     (fs/copy "test/fake-herdr" herdr)
-    (spit (str flow) "#!/usr/bin/env sh\nprintf 'Current.Unknown\\n'\n")
-    (.setExecutable (java.io.File. (str flow)) true)
+    (install-fake-flow! tools)
     (spit (str orchestrate)
           "#!/usr/bin/env bash\ncase \"$1\" in Lock.*) echo 'Locked.{ 1 Test sender [ /tmp ] test }';; Release.*) echo 'Released.{ 1 Test sender [ /tmp ] test }';; esac\n")
     (.setExecutable (java.io.File. (str herdr)) true)
@@ -152,6 +161,7 @@
                      "FAKE_HERDR_STATE" state
                      "FAKE_HERDR_PROMPT_LOG" (str (fs/path root "unused-prompts.edn"))}]
     (try
+      (install-fake-flow! tools)
       (fs/copy "test/fake-herdr" herdr)
       (spit (str orchestrate)
             "#!/usr/bin/env bash\ncase \"$1\" in Lock.*) echo 'Locked.{ 1 Test sender [ /tmp ] test }';; Release.*) echo 'Released.{ 1 Test sender [ /tmp ] test }';; esac\n")

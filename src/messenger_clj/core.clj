@@ -120,7 +120,7 @@
                      (str (fs/path (System/getProperty "user.home") ".local/state/messenger-clj")))))
 (defn registry [] (or *registry* (->DatalevinRegistry (root))))
 (defn now [] (current-time (or *clock* (->SystemClock))))
-(defn quote-datom [s] (str "«" (str/replace (str s) #"[\\»]" {\\ "\\\\" \» "\\»"}) "»"))
+(defn quote-datom [s] (str "«" (str/replace (str s) #"[\\»]" {"\\" "\\\\" "»" "\\»"}) "»"))
 (defn read-msg [value]
   ;; `data_readers.clj` binds #msg to this function for Clojure readers.  The
   ;; tagged value is deliberately just the two pane-visible fields.

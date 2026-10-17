@@ -183,3 +183,11 @@
                              (is (= "flow" program))
                              {:exit 0 :out "Current.Asleep"})]
       (is (thrown-with-msg? Exception #"ManagedDeliveryOptionUnsupported" (call))))))
+
+(deftest datom-quoting-preserves-backslashes-delimiters-and-unicode
+  (is (= "«»" (runtime/quote-datom "")))
+  (is (= "«\\\\»" (runtime/quote-datom "\\")))
+  (is (= "«\\»»" (runtime/quote-datom "»")))
+  (is (= "««λ\n\\\\\\»»" (runtime/quote-datom "«λ\n\\»")))
+  (is (= "Order.«a\\\\b\\»c»"
+         (bridge/request-datom {:variant :msg :body "a\\b»c"}))))
