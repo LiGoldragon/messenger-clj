@@ -71,7 +71,7 @@
                        (str flow) "Current.{ Field Core Secondary }")]
       (is (= 0 (:exit reply)) (:err reply))
       (is (= "Current.Unknown" (str/trim (:out reply)))))
-  nil)
+  nil))
 
 (defn fake-herdr-environment []
   (let [root (str (fs/create-temp-dir {:prefix "hm-cli-presented-"}))
