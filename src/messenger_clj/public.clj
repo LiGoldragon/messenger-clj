@@ -5,6 +5,7 @@
             [messenger-clj.legacy-import :as legacy]
             [cheshire.core :as json]
             [messenger-clj.core :as runtime]
+            [messenger-clj.flow-bridge :as bridge]
             [messenger-clj.typed-store :as store]
             [malli.core :as m]))
 
@@ -134,12 +135,33 @@
   (named-call target
     #(do (resolve! target false)
          (delivery-receipt! target (f)))))
-(defn send! [target & args] (delivery! target #(apply runtime/send! target args)))
-(defn send-psyche! [target & args] (delivery! target #(apply runtime/send-psyche! target args)))
-(defn send-psyches! [target & args] (delivery! target #(apply runtime/send-psyches! target args)))
-(defn send-abrupt! [target & args] (delivery! target #(apply runtime/send-abrupt! target args)))
-(defn send-abrupt-psyche! [target & args] (delivery! target #(apply runtime/send-abrupt-psyche! target args)))
-(defn send-abrupt-request! [target & args] (delivery! target #(apply runtime/send-abrupt-request! target args)))
+(defn routed-delivery! [target request options legacy]
+  (name! target)
+  (runtime/validate-request! request)
+  (if (bridge/managed? target)
+    (bridge/send! target request options)
+    (delivery! target legacy)))
+(defn send! [target body wait-presented pane & extra]
+  (routed-delivery! target {:variant :msg :body body}
+                    {:wait-presented wait-presented :pane pane}
+                    #(apply runtime/send! target body wait-presented pane extra)))
+(defn send-psyche! [target context body wait-presented pane & extra]
+  (routed-delivery! target {:variant :psyche :context context :body body}
+                    {:wait-presented wait-presented :pane pane}
+                    #(apply runtime/send-psyche! target context body wait-presented pane extra)))
+(defn send-psyches! [target body wait-presented pane & extra]
+  (routed-delivery! target {:variant :psyches :body body}
+                    {:wait-presented wait-presented :pane pane}
+                    #(apply runtime/send-psyches! target body wait-presented pane extra)))
+(defn send-abrupt! [target body wait-presented]
+  (routed-delivery! target {:variant :msg :body body} {:abrupt true :wait-presented wait-presented}
+                    #(runtime/send-abrupt! target body wait-presented)))
+(defn send-abrupt-psyche! [target context body wait-presented]
+  (routed-delivery! target {:variant :psyche :context context :body body} {:abrupt true :wait-presented wait-presented}
+                    #(runtime/send-abrupt-psyche! target context body wait-presented)))
+(defn send-abrupt-request! [target request wait-presented]
+  (routed-delivery! target request {:abrupt true :wait-presented wait-presented}
+                    #(runtime/send-abrupt-request! target request wait-presented)))
 (defn registry-read [f]
   (try (f)
        (catch Exception error

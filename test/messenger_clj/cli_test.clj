@@ -69,8 +69,11 @@
         config-home (str (fs/path root "config"))
         prompt-server (fake-prompt-server config-home)
         herdr (fs/path tools "herdr")
-        orchestrate (fs/path tools "orchestrate")]
+        orchestrate (fs/path tools "orchestrate")
+        flow (fs/path tools "flow")]
     (fs/copy "test/fake-herdr" herdr)
+    (spit (str flow) "#!/usr/bin/env sh\nprintf 'Current.Unknown\\n'\n")
+    (.setExecutable (java.io.File. (str flow)) true)
     (spit (str orchestrate)
           "#!/usr/bin/env bash\ncase \"$1\" in Lock.*) echo 'Locked.{ 1 Test sender [ /tmp ] test }';; Release.*) echo 'Released.{ 1 Test sender [ /tmp ] test }';; esac\n")
     (.setExecutable (java.io.File. (str herdr)) true)

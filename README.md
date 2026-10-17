@@ -237,3 +237,21 @@ or prompting. Consumption and the pre-prompt attempt remain one transaction;
 an uncertain submission is not automatically replayed. This is ordering of
 stored enqueue events, not a claim to reconstruct arrival times lost before
 historical imports, nor a new automatic queue-draining service.
+
+## Flow-managed address delivery
+
+Public sends first ask the installed Flow CLI `Current` for the exact metaflow
+address. Awake, Asleep and Ended addresses use the installed Message CLI, which
+identifies the actual subprocess peer through Flow; no sender ID is supplied.
+Only an explicit `Current.Unknown` permits the existing legacy registry/pane
+route. Missing executables, unavailable sockets, refused or malformed replies
+never trigger pane fallback. Home must select matching `flow` and `message`
+clients on the messenger process PATH.
+
+An ordinary hm-send body is an Order; psyche records retain their Context and
+Verbatim fields in order. Message Delivered, Queued and Woken remain distinct
+receipts; Queued does not claim delivery. Pane selection, interrupt and
+wait-presented options have no equivalent queue contract and refuse for managed
+addresses. Exchange failure after attempting Message is uncertain, never a
+reason to resend through a pane. Legacy-only senders require supported Flow
+adoption before Message can identify them; this bridge cannot invent bindings.

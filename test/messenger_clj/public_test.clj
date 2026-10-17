@@ -1,11 +1,18 @@
 (ns messenger-clj.public-test
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is use-fixtures]]
             [cheshire.core :as json]
             [messenger-clj.public :as public]
+            [messenger-clj.flow-bridge :as bridge]
             [messenger-clj.core :as runtime]
             [messenger-clj.typed-store :as store]))
+
+(use-fixtures :each (fn [f]
+  (binding [bridge/*call* (fn [program _]
+                          (if (= program "flow") {:exit 0 :out "Current.Unknown"}
+                              (throw (ex-info "Unexpected Message call" {}))))]
+    (f))))
 
 (def target "Field Core Secondary")
 (def route {:session "s" :name "internal-agent-00f95a" :pane_id "p" :terminal_id "t"
@@ -128,3 +135,51 @@
          (is (= "Transported.{ «Field Core Secondary» working }"
                 (public/repair! target "pending" "s" "p" "t" "agent" "codex")))
          (is (= "00f95a" (first @seen))))))))
+
+(deftest managed-asleep-delivery-needs-no-legacy-registration
+  (let [calls (atom [])]
+    (binding [bridge/*call* (fn [program query]
+                             (swap! calls conj [program query])
+                             {:exit 0 :out (if (= program "flow") "Current.Asleep" "Queued")})]
+      (with-redefs [runtime/route-records (fn [] (throw (ex-info "Legacy registry must not be read" {})))
+                    runtime/send! (fn [& _] (throw (ex-info "No pane fallback" {})))]
+        (is (= "Queued.{ «Field Core Secondary» }" (public/send! target "whole » body" false nil 10)))
+        (is (= [["flow" "Current.{ Field «Core» Secondary }"]
+                ["message" "Send.{ Address.{ Field «Core» Secondary } Order.«whole \\» body» }"]]
+               @calls))))))
+
+(deftest managed-psyche-keeps-context-and-verbatim-without-sender-spoofing
+  (let [queries (atom [])]
+    (binding [bridge/*call* (fn [program query]
+                             (swap! queries conj [program query])
+                             {:exit 0 :out (if (= program "flow") "Current.Awake.«internal-id»" "Delivered")})]
+      (is (= "Delivered.{ «Field Core Secondary» }"
+             (public/send-psyche! target "context" "verbatim" false nil)))
+      (is (= "Send.{ Address.{ Field «Core» Secondary } Psyche.{ «context» «verbatim» } }"
+             (second (last @queries))))
+      (public/send-psyches! target "[[\"c1\" \"v1\"] [\"c2\" \"v2\"]]" false nil)
+      (is (= "Send.{ Address.{ Field «Core» Secondary } Psyches.[ { «c1» «v1» } { «c2» «v2» } ] }"
+             (second (last @queries)))))))
+
+(deftest managed-refusals-and-uncertainty-never-fall-back
+  (doseq [reply [{:exit 0 :out "Refused.Unidentified.{ 42 99 }"}
+                 {:exit 0 :out "Refused.Ended.{ Field Core Secondary }"}
+                 {:exit 2 :out ""} {:exit 0 :out "not a response"}]]
+    (binding [bridge/*call* (fn [program _] (if (= program "flow") {:exit 0 :out "Current.Ended"} reply))]
+      (with-redefs [runtime/send! (fn [& _] (throw (AssertionError. "No fallback")))]
+        (is (thrown? clojure.lang.ExceptionInfo (public/send! target "body" false nil))))))
+  (doseq [reply [{:exit 1 :out ""} {:exit 0 :out "Refused.Store.«offline»"}
+                 {:exit 0 :out "Current.Unknown trailing"}]]
+    (let [calls (atom 0)]
+      (binding [bridge/*call* (fn [_ _] (swap! calls inc) reply)]
+        (is (thrown? clojure.lang.ExceptionInfo (public/send! target "body" false nil)))
+        (is (= 1 @calls))))))
+
+(deftest managed-pane-interrupt-and-presentation-options-refuse-before-message
+  (doseq [call [#(public/send! target "body" true nil)
+                #(public/send! target "body" false "s:p")
+                #(public/send-abrupt! target "body" false)]]
+    (binding [bridge/*call* (fn [program _]
+                             (is (= "flow" program))
+                             {:exit 0 :out "Current.Asleep"})]
+      (is (thrown-with-msg? Exception #"ManagedDeliveryOptionUnsupported" (call))))))
