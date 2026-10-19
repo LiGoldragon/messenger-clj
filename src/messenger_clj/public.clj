@@ -49,7 +49,7 @@
   (let [data (ex-data error)
         message (or (.getMessage error) "")
         public? (re-find #"^(MetaflowRequired|MetaflowMetadataRequired|AmbiguousTarget|TargetNotRegistered|RuntimeIdentityRequired|RegistrationIdentityRequired|RegistrationIdentityConflict|MetaflowAlreadyRegistered):" message)
-        held (re-find #"^Held\.\{ \S+ (\S+) (attempt-[a-f0-9]+) \}" message)
+        held (re-find #"^Held\.\{ \S+ (\S+) (attempt-[a-f0-9-]+) \}" message)
         uncertain (str/starts-with? message "Uncertain.{")
         reason (or (second (re-find #"^(SenderNotRegistered|SenderBindingUnavailable|LegacyPendingOrigin|PendingOrder|RelayOverflow|IdentityChanged|RouteHold|InTransition|Retired)(?:[:. ]|$)" message))
                    (cond

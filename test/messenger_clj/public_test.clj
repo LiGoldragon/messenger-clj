@@ -119,6 +119,11 @@
                                                                    {:hm/held true :hm/attempt-id "0123456789ab"})))]
        (is (thrown-with-msg? Exception #"Held\.\{ «Field Core Secondary» RepairRequired attempt-0123456789ab"
                             (public/send! target "body" false nil 10))))
+     ;; core renders the first twelve characters of a UUID attempt id, hyphen included.
+     (with-redefs [runtime/send! (fn [& _] (throw (ex-info "Held.{ 42265e Blocked attempt-337b9573-5fa }"
+                                                                   {:hm/held true :hm/attempt-id "337b9573-5fa0"})))]
+       (is (thrown-with-msg? Exception #"Held\.\{ «Field Core Secondary» Blocked attempt-337b9573-5fa"
+                            (public/send! target "body" false nil 10))))
      (with-redefs [runtime/send! (fn [& _] (throw (ex-info "Uncertain.{ 00f95a attempt-0123456789ab } do not retry" {})))]
        (try (public/send! target "body" false nil 10)
             (is false "must refuse uncertain delivery")
