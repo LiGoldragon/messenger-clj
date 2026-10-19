@@ -101,7 +101,7 @@
   (in-registry
    (fn [root]
      (with-redefs [runtime/live-agents (constantly [])]
-       (is (= "METAFLOW\tSESSION\tSTATE\nField Core Secondary\ts\tSTALE" (public/listing!))))
+       (is (= "TITLE\tSESSION\tSTATE\n{ Field Core Secondary 00f95a }\ts\tSTALE" (public/listing!))))
      (let [state (public/heartbeat-state!)]
        (is (not (str/includes? state "00f95a")))
        (is (not (str/includes? state (:native_thread route))))
@@ -191,3 +191,25 @@
   (is (= "««λ\n\\\\\\»»" (runtime/quote-datom "«λ\n\\»")))
   (is (= "Order.«a\\\\b\\»c»"
          (bridge/request-datom {:variant :msg :body "a\\b»c"}))))
+
+(deftest roster-title-is-metadata-and-record-id-not-transport-name
+  (in-registry
+   (fn [root]
+     (let [before (store/routes root)]
+       (with-redefs [runtime/live-agents (constantly [(assoc route :agent_status "working")])]
+         (is (= "TITLE\tSESSION\tSTATE\n{ Field Core Secondary 00f95a }\ts\tworking"
+                (public/listing!))))
+       (is (= before (store/routes root)))
+       (is (= "00f95a" (public/resolve! target false)))
+       (is (thrown-with-msg? Exception #"MetaflowRequired"
+                            (public/name! "{ Field Core Secondary 00f95a }")))
+       (is (= "{ Field Core Secondary aabbcc }"
+              (public/display-title! "aabbcc" (assoc route :name "claude-ffffffffffffffff"))))
+       (doseq [bad ["flow-aabbcc" "aabbccdd" "native-uuid" nil]]
+         (is (thrown-with-msg? Exception #"DisplayIdentityRequired"
+                              (public/display-title! bad route))))
+       (is (thrown-with-msg? Exception #"MetaflowMetadataRequired"
+                            (public/display-title! "00f95a" (dissoc route :topic))))
+       (store/put-route! root "aabbcc" (dissoc route :topic))
+       (with-redefs [runtime/live-agents (constantly [])]
+         (is (thrown-with-msg? Exception #"MetaflowMetadataRequired" (public/listing!))))))))

@@ -188,18 +188,23 @@
                                {:metaflow (name! name) :state "retired"}
                                {:state "retired" :metadata_unavailable true}))
                            (store/retirements (runtime/root)))}))))
+(defn display-title! [flow route]
+  ;; Display only: never truncate a registry key or derive metadata from NAME.
+  (when-not (and (string? flow) (re-matches #"[0-9a-f]{6}" flow))
+    (fail "DisplayIdentityRequired: registration needs its actual six-character flow ID"))
+  (str "{ " (route-name! route) " " flow " }"))
 (defn listing! []
   (registry-read
     #(let [agents (runtime/live-agents)
-           rows (for [[_ route] (sort-by (comp route-name! val) (runtime/route-records))
-                      :let [name (route-name! route)
+           rows (for [[flow route] (sort-by (comp route-name! val) (runtime/route-records))
+                      :let [title (display-title! flow route)
                             matches (filter (partial runtime/route-matches-agent? route) agents)
                             state (case (count matches)
                                     0 "STALE"
                                     1 (or (:agent_status (first matches)) "unknown")
                                     "AMBIGUOUS")]]
-                  (str name "\t" (:session route) "\t" state))]
-       (str/join "\n" (cons "METAFLOW\tSESSION\tSTATE" rows)))))
+                  (str title "\t" (:session route) "\t" state))]
+       (str/join "\n" (cons "TITLE\tSESSION\tSTATE" rows)))))
 
 (defn import-json! [source target receipt apply?]
   (try

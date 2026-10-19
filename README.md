@@ -156,8 +156,14 @@ takes a Lock through the `orchestrate` on `PATH`.
 Every flow-facing identity argument is one quoted `"Aspect Topic Layer"`.
 `hm-send`, `hm-send-abrupt`, `hm-register`, `hm-repair`, `hm-deregister`,
 `hm-rebind`, `hm-move`, `hm-retire` and the corresponding `messenger-clj`
-operations reject internal IDs and dotted names. `hm-list` and
-`hm-heartbeat-state` emit metaflow names, not internal keys or native UUIDs.
+operations reject internal IDs and dotted names. `hm-list` displays
+`{ Aspect Topic Layer ID }` in its TITLE column, using explicit registration
+metadata and the exact six-character flow ID. It never derives a title from
+an internal Herdr name or truncates an unsupported ID. Incomplete metadata
+or unsupported display IDs refuse without changing registrations.
+These display titles are not command targets. `hm-heartbeat-state` and
+command receipts retain three-field metaflow names without runtime IDs or
+native UUIDs.
 The current lookup owner is **messenger-clj's existing typed registry**;
 this does not claim that native Flow Nexus already owns the mapping.
 
