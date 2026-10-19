@@ -175,7 +175,7 @@
         (is (str/includes? (:out registered) "Registered.{ «Field Core Secondary» }")))
       (let [listed (invoke environment "hm-list")]
         (is (zero? (:exit listed)) (:err listed))
-        (is (str/includes? (:out listed) "Field Core Secondary\ts\tworking")))
+        (is (= "TITLE\tSESSION\tSTATE\n{ Field Core Secondary 00f95a }\ts\tworking\n" (:out listed))))
       (let [snapshot (invoke environment "hm-heartbeat-state")
             value (json/parse-string (:out snapshot) true)]
         (is (zero? (:exit snapshot)) (:err snapshot))
