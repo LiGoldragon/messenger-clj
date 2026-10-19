@@ -132,6 +132,26 @@
               (is (str/includes? (.getMessage error) "Do not retry"))
               (is (not (str/includes? (.getMessage error) "00f95a")))))))))
 
+(deftest repair-required-keeps-hyphenated-attempt-and-original-evidence
+  (in-registry
+   (fn [_]
+     (let [calls (atom 0)
+           attempt "337b9573-5fa0-4000-8000-000000000000"
+           original (ex-info "Held.{ 00f95a RepairRequired attempt-337b9573-5fa }"
+                             {:hm/held true :hm/attempt-id attempt})]
+       (with-redefs [runtime/send! (fn [& _] (swap! calls inc) (throw original))]
+         (let [failure (try (public/send! target "whole body" false nil 10)
+                            nil
+                            (catch Exception error error))]
+           (is (some? failure))
+           (when failure
+             (is (= "Held.{ «Field Core Secondary» RepairRequired attempt-337b9573-5fa }"
+                    (.getMessage failure)))
+             (is (= attempt (:hm/attempt-id (ex-data failure))))
+             (is (true? (:hm/held (ex-data failure))))
+             (is (identical? original (.getCause failure))))
+           (is (= 1 @calls))))))))
+
 (deftest repair-retains-the-real-delivery-grade-and-an-internal-exact-key
   (in-registry
    (fn [_]
