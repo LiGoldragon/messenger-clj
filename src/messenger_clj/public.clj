@@ -49,7 +49,14 @@
   (let [data (ex-data error)
         message (or (.getMessage error) "")
         public? (re-find #"^(MetaflowRequired|MetaflowMetadataRequired|AmbiguousTarget|TargetNotRegistered|RuntimeIdentityRequired|RegistrationIdentityRequired|RegistrationIdentityConflict|MetaflowAlreadyRegistered):" message)
-        held (re-find #"^Held\.\{ \S+ (\S+) (attempt-[a-f0-9-]+) \}" message)
+        held-text (re-find #"^Held\.\{ \S+ (\S+) ((?:attempt-)?[a-f0-9-]+) \}" message)
+        attempt-id (:hm/attempt-id data)
+        held (when (and (true? (:hm/held data))
+                        (string? attempt-id) (not (str/blank? attempt-id))
+                        held-text
+                        (contains? #{attempt-id (str "attempt-" (subs attempt-id 0 (min 12 (count attempt-id))))}
+                                   (nth held-text 2)))
+               held-text)
         uncertain (str/starts-with? message "Uncertain.{")
         reason (or (second (re-find #"^(SenderNotRegistered|SenderBindingUnavailable|LegacyPendingOrigin|PendingOrder|RelayOverflow|IdentityChanged|RouteHold|InTransition|Retired)(?:[:. ]|$)" message))
                    (cond

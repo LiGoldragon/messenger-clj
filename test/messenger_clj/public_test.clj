@@ -152,6 +152,68 @@
              (is (identical? original (.getCause failure))))
            (is (= 1 @calls))))))))
 
+(deftest stale-route-real-hold-keeps-full-pending-id-and-body
+  (in-registry
+   (fn [root]
+     (store/put-route! root "sender"
+                       (assoc route :pane_id "sender-pane" :terminal_id "sender-terminal"
+                              :aspect "Mind" :topic "tests" :layer "Primary"))
+     (let [prompts (atom 0)
+           sends (atom 0)
+           real-send runtime/send!
+           before (store/route-for root "00f95a")
+           body "whole body λ\nsecond line"]
+       (with-redefs [runtime/live-agents (constantly [])
+                     runtime/send! (fn [& args] (swap! sends inc) (apply real-send args))
+                     runtime/prompt!* (fn [& _] (swap! prompts inc))]
+         (let [failure (try (public/send! target body false nil 0)
+                            nil (catch Exception error error))
+               pending (store/pending-for root "00f95a")
+               id (get-in (first pending) [:attempt :id])]
+           (is (some? failure))
+           (is (= 1 (count pending)))
+           (is (string? id))
+           (when failure
+             (is (= (str "Held.{ «Field Core Secondary» RepairRequired " id " }")
+                    (.getMessage failure)))
+             (is (= id (:hm/attempt-id (ex-data failure))))
+             (is (true? (:hm/held (ex-data failure))))
+             (is (some? (.getCause failure))))
+           (is (= body (:message (first pending))))
+           (is (= body (get-in (first pending) [:attempt :body])))
+           (is (= :RepairRequired (get-in (first pending) [:attempt :reason])))
+           (is (= before (store/route-for root "00f95a")))
+           (is (= 1 @sends))
+           (is (zero? @prompts))))))))
+
+(deftest held-text-alone-or-mismatched-identity-is-not-held
+  (doseq [data [{} {:hm/held false :hm/attempt-id "337b9573-5fa0"}
+                  {:hm/held true :hm/attempt-id "different"}]]
+    (let [original (ex-info "Held.{ 00f95a RepairRequired 337b9573-5fa0 }" data)
+          failure (public/named-error target original)]
+      (is (str/starts-with? (.getMessage failure) "Refused.{"))
+      (is (identical? original (.getCause failure))))))
+
+(deftest failed-pending-confirmation-never-becomes-a-held-receipt
+  (in-registry
+   (fn [root]
+     (store/put-route! root "sender"
+                       (assoc route :pane_id "sender-pane" :terminal_id "sender-terminal"
+                              :aspect "Mind" :topic "tests" :layer "Primary"))
+     (let [prompts (atom 0)]
+       (with-redefs [runtime/live-agents (constantly [])
+                     runtime/prompt!* (fn [& _] (swap! prompts inc))
+                     store/pending-by-id (fn [& _] nil)]
+         (let [failure (try (public/send! target "retained body" false nil 0)
+                            nil (catch Exception error error))]
+           (is (some? failure))
+           (when failure
+             (is (str/starts-with? (.getMessage failure) "Refused.{"))
+             (is (not (true? (:hm/held (ex-data failure)))))
+             (is (some #(= "Pending ledger index did not confirm persistence" (.getMessage %))
+                       (take-while some? (iterate #(.getCause %) failure)))))
+           (is (zero? @prompts))))))))
+
 (deftest repair-retains-the-real-delivery-grade-and-an-internal-exact-key
   (in-registry
    (fn [_]
