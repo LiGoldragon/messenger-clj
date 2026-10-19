@@ -308,7 +308,8 @@
 (defn migrate-fixture [root agents target-reader process-reader f]
   (let [prompts (atom 0)]
     (with-redefs [runtime/live-agents agents
-                  runtime/target-agent* target-reader
+                  runtime/target-agent* (fn [& args] {:agent (apply target-reader args)})
+                  runtime/herdr! (fn [& _] {:panes []})
                   runtime/process-info* (fn [& _] {:foreground_processes [{:pid 123}]})
                   runtime/migration-process-start! process-reader
                   runtime/migration-current! (fn [& _] nil)
@@ -366,7 +367,9 @@
              (is (zero? @prompts)))))))))
 
 (deftest migration-rechecks-candidate-process-old-binding-and-ownership
-  (doseq [case [:moved-again :old-returned :pid-reused :foreign :transition :retired]]
+  (doseq [[case expected] [[:moved-again "EvidenceChanged"] [:old-returned "OldBindingLive"]
+                           [:pid-reused "EvidenceChanged"] [:foreign "ForeignRegistration"]
+                           [:transition "TransitionPending"] [:retired "Retired"]]]
     (in-registry
      (fn [root]
        (when (= case :foreign)
@@ -391,11 +394,15 @@
              (with-redefs [store/retirement-for (fn [r id]
                                                  (if (= case :retired) {:state "retired"}
                                                      (retirement r id)))]
-               (is (thrown-with-msg? Exception #"MigrationRefused"
+               (is (thrown-with-msg? Exception (re-pattern (str "MigrationRefused.* " expected " "))
                                     (if (= case :retired)
                                       (public/named-call target #(runtime/migrate-registration! "00f95a" before (:name route) (:session route) (:native_thread route) (public/metadata target)))
                                       (register-moved))) (name case)))
              (is (= before (store/route-for root "00f95a")))
+             (when (contains? #{:moved-again :old-returned :pid-reused} case)
+               (is (= 3 @calls) "reaches the second candidate observation"))
+             (when (= case :pid-reused)
+               (is (= 2 @process-calls) "compares two kernel-start witnesses"))
              (is (zero? @prompts))))
          (is (= pending (store/pending-for root "00f95a"))))))))
 
@@ -406,3 +413,49 @@
                            (runtime/migration-current! "00f95a" route)))))
   (binding [runtime/*shell* (fn [& _] {:exit 0 :out "Current.Awake.00f95a"})]
     (is (nil? (runtime/migration-current! "00f95a" route)))))
+
+(deftest migration-observation-refusals-preserve-route-pending-and-cause
+  (doseq [[scenario expected] [[:initial-error "AgentObservationUnavailable"]
+                               [:initial-malformed "AgentObservationUnavailable"]
+                               [:pane-without-agent "OldPanePresent"]
+                               [:pane-returned "OldPanePresent"]
+                               [:pane-malformed "PaneObservationUnavailable"]
+                               [:reply-malformed "AgentReplyMalformed"]]]
+    (in-registry
+     (fn [root]
+       (let [before (store/route-for root "00f95a")
+             pending (store/pending-for root "00f95a")
+             history (store/metaflow-identities root)
+             pane-calls (atom 0)
+             original (ex-info "original observation failure" {:diagnostic :retained})]
+         (migrate-fixture root (constantly [moved-agent]) (fn [& _] moved-agent) (constantly "1")
+           (fn [prompts]
+             (with-redefs [runtime/live-agents (fn [] (case scenario
+                                                        :initial-error (throw original)
+                                                        :initial-malformed nil
+                                                        [moved-agent]))
+                           runtime/target-agent* (fn [& _] (if (= scenario :reply-malformed)
+                                                            moved-agent {:agent moved-agent}))
+                           runtime/herdr! (fn [& args]
+                                            (is (= ["--session" "s" "pane" "list"] args))
+                                            (let [n (swap! pane-calls inc)]
+                                              (cond
+                                                (= scenario :pane-malformed) {}
+                                                (or (= scenario :pane-without-agent)
+                                                    (and (= scenario :pane-returned) (= 2 n)))
+                                                {:panes [{:pane_id "p" :terminal_id "t" :agent nil}]}
+                                                :else {:panes []})))]
+               (let [error (try (register-moved) nil (catch Exception e e))]
+                 (is (some? error))
+                 (when error
+                   (is (= (str "MigrationRefused.{ «Field Core Secondary» " expected " }")
+                          (.getMessage error)))
+                   (when (= scenario :initial-error)
+                     (is (some #(identical? original %)
+                               (take-while some? (iterate #(.getCause %) error))))))))
+             (when (= scenario :pane-returned)
+               (is (= 2 @pane-calls) "vacancy rechecked immediately before save"))
+             (is (= before (store/route-for root "00f95a")))
+             (is (= pending (store/pending-for root "00f95a")))
+             (is (= history (store/metaflow-identities root)))
+             (is (zero? @prompts)))))))))

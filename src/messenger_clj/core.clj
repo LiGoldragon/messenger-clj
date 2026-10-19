@@ -614,6 +614,29 @@
                    (contains? #{(str "Current.Awake." flow)
                                 (str "Current.Awake." (quote-datom flow))} answer))
       (migration-refuse! :FlowHolderMismatch))))
+(defn migration-agents! []
+  (try
+    (let [observed (live-agents)
+          _ (when-not (sequential? observed) (migration-refuse! :AgentObservationUnavailable))
+          agents (vec observed)]
+      (when-not (every? #(and (map? %) (every? (fn [key] (and (string? (get % key))
+                                                                             (not (str/blank? (get % key)))))
+                                                          [:session :pane_id :terminal_id :name :agent])) agents)
+        (migration-refuse! :AgentObservationUnavailable))
+      agents)
+    (catch Exception error
+      (throw (ex-info "Migration agent observation unavailable"
+                      {:hm/failure true :hm/migration-refusal :AgentObservationUnavailable}
+                      error)))))
+(defn migration-old-pane-absent! [existing]
+  (let [reply (herdr! "--session" (:session existing) "pane" "list")
+        panes (:panes reply)]
+    (when-not (and (sequential? panes)
+                   (every? #(and (map? %) (string? (:pane_id %))
+                                 (not (str/blank? (:pane_id %)))) panes))
+      (migration-refuse! :PaneObservationUnavailable))
+    (when (some #(= (:pane_id existing) (:pane_id %)) panes)
+      (migration-refuse! :OldPanePresent))))
 (defn migration-candidate! [flow existing agents]
   (when (some #(and (= (:session existing) (:session %))
                    (= (:pane_id existing) (:pane_id %))) agents)
@@ -636,7 +659,8 @@
       candidate)))
 (defn migration-witness! [candidate]
   (let [reply (target-agent* (transport) candidate)
-        actual (assoc (or (:agent reply) reply) :session (:session candidate))
+        _ (when-not (map? (:agent reply)) (migration-refuse! :AgentReplyMalformed))
+        actual (assoc (:agent reply) :session (:session candidate))
         keys [:session :name :agent :pane_id :terminal_id :agent_session]
         process-reply (process-info* (transport) candidate)
         info (or (:process_info process-reply) process-reply)
@@ -661,10 +685,11 @@
                    (= metadata (select-keys existing [:aspect :topic :layer])))
       (migration-refuse! :DeclarationMismatch))
     (migration-current! flow existing)
-    (let [candidate (migration-candidate! flow existing (live-agents))
+    (migration-old-pane-absent! existing)
+    (let [candidate (migration-candidate! flow existing (migration-agents!))
           witness (migration-witness! candidate)
           replacement (route-binding! (merge existing (select-keys candidate stable-route-keys)))
-          current (migration-candidate! flow existing (live-agents))]
+          current (migration-candidate! flow existing (migration-agents!))]
       (when-not (and (= candidate current)
                      (= witness (migration-witness! current))
                      (= existing (load-route (registry) flow)))
@@ -672,6 +697,7 @@
       (when (store/retirement-for (root) flow) (migration-refuse! :Retired))
       (assert-native-not-retired! (:native_thread existing) flow)
       (migration-current! flow existing)
+      (migration-old-pane-absent! existing)
       ;; Caller holds the registry reservation; put-route! is one transaction.
       ;; Preserve route_hold/state and every pending outcome; never replay here.
       (save-route! (registry) flow replacement)
@@ -687,7 +713,7 @@
    (with-reservation flow
      (fn []
        (let [existing (load-route (registry) flow)]
-         (if (and existing (not-any? #(same-stable-route? existing %) (live-agents)))
+         (if (and existing (not-any? #(same-stable-route? existing %) (migration-agents!)))
            (migrate-registration! flow existing name session native-thread metadata)
            (binding [*with-reservation* (fn [_ operation] (operation))]
              (register-live! flow name session native-thread metadata))))))))
