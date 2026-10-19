@@ -543,8 +543,8 @@
 (defn assert-target! [target flow]
   (when (and (not= target flow) (not= flow (target-flow! target)))
     (fail "TargetIdentityChanged: registered metaflow changed before send")))
-(defn register!
-  ([flow name session native-thread] (register! flow name session native-thread nil))
+(defn register-live!
+  ([flow name session native-thread] (register-live! flow name session native-thread nil))
   ([flow name session native-thread metadata]
   (flow-id! flow)
   (when metadata (metadata! metadata))
@@ -584,6 +584,113 @@
               (fail "Live route identity is already registered to another Flow"))
             (save-route! (registry) flow route)
             (str "Registered " flow ": " (:name route) " (" session ")"))))))))
+;; Migration has no delivery operation: RouteBinding changes, PendingIntent and
+;; DeliveryAttempt do not. A refusal carries a closed reason through public.clj.
+(defn migration-refuse! [reason]
+  (throw (ex-info (str "Migration refused: " (name reason))
+                  {:hm/failure true :hm/migration-refusal reason})))
+(defn migration-process-start! [pid]
+  (when-not (and (integer? pid) (pos? pid))
+    (migration-refuse! :ProcessUnavailable))
+  (try
+    (let [stat (slurp (str "/proc/" pid "/stat"))
+          fields (str/split (subs stat (inc (.lastIndexOf stat ")"))) #"\s+")
+          ;; Leading space is removed before indexing Linux stat fields 3..22.
+          fields (vec (remove str/blank? fields))
+          start (nth fields 19)]
+      (when (or (contains? #{"Z" "X"} (first fields))
+                (not (re-matches #"[0-9]+" start)))
+        (migration-refuse! :ProcessUnavailable))
+      start)
+    (catch Exception error
+      (throw (ex-info "Migration process identity unavailable"
+                      {:hm/failure true :hm/migration-refusal :ProcessUnavailable} error)))))
+(defn migration-current! [flow route]
+  (let [result (*shell* {:out :string :err :string :continue true :timeout 15000}
+                       "flow" (str "Current.{ " (:aspect route) " "
+                                   (quote-datom (:topic route)) " " (:layer route) " }"))
+        answer (str/trim (or (:out result) ""))]
+    (when-not (and (= 0 (:exit result))
+                   (contains? #{(str "Current.Awake." flow)
+                                (str "Current.Awake." (quote-datom flow))} answer))
+      (migration-refuse! :FlowHolderMismatch))))
+(defn migration-candidate! [flow existing agents]
+  (when (some #(and (= (:session existing) (:session %))
+                   (= (:pane_id existing) (:pane_id %))) agents)
+    (migration-refuse! :OldBindingLive))
+  (let [hits (vec (filter #(= (select-keys existing [:session :name :agent])
+                              (select-keys % [:session :name :agent])) agents))]
+    (when-not (= 1 (count hits))
+      (migration-refuse! (if (empty? hits) :CandidateMissing :CandidateAmbiguous)))
+    (let [candidate (first hits)]
+      (when-not (and (:agent_session candidate) (:native_thread existing))
+        (migration-refuse! :OfficialNativeRequired))
+      (try (registration-native-thread! candidate nil (:native_thread existing))
+           (catch Exception _ (migration-refuse! :NativeMismatch)))
+      (when (some (fn [[id record]]
+                    (and (not= id flow)
+                         (or (same-stable-route? candidate record)
+                             (= (:native_thread existing) (:native_thread record)))))
+                  (route-records))
+        (migration-refuse! :ForeignRegistration))
+      candidate)))
+(defn migration-witness! [candidate]
+  (let [reply (target-agent* (transport) candidate)
+        actual (assoc (or (:agent reply) reply) :session (:session candidate))
+        keys [:session :name :agent :pane_id :terminal_id :agent_session]
+        process-reply (process-info* (transport) candidate)
+        info (or (:process_info process-reply) process-reply)
+        processes (:foreground_processes info)]
+    (when-not (= (select-keys candidate keys) (select-keys actual keys))
+      (migration-refuse! :CandidateChanged))
+    (when-not (contains? #{"idle" "working" "done"} (:agent_status actual))
+      (migration-refuse! :CandidateUnavailable))
+    (when-not (and (sequential? processes) (seq processes))
+      (migration-refuse! :ProcessUnavailable))
+    {:agent (select-keys actual keys)
+     :processes (mapv (fn [process]
+                        [(:pid process) (migration-process-start! (:pid process))])
+                      processes)}))
+(defn migrate-registration! [flow existing name session native-thread metadata]
+  (try
+    (when (store/retirement-for (root) flow) (migration-refuse! :Retired))
+    (assert-native-not-retired! (:native_thread existing) flow)
+    (when (:transition existing) (migration-refuse! :TransitionPending))
+    (when-not (and (= name (:name existing)) (= session (:session existing))
+                   (= native-thread (:native_thread existing))
+                   (= metadata (select-keys existing [:aspect :topic :layer])))
+      (migration-refuse! :DeclarationMismatch))
+    (migration-current! flow existing)
+    (let [candidate (migration-candidate! flow existing (live-agents))
+          witness (migration-witness! candidate)
+          replacement (route-binding! (merge existing (select-keys candidate stable-route-keys)))
+          current (migration-candidate! flow existing (live-agents))]
+      (when-not (and (= candidate current)
+                     (= witness (migration-witness! current))
+                     (= existing (load-route (registry) flow)))
+        (migration-refuse! :EvidenceChanged))
+      (when (store/retirement-for (root) flow) (migration-refuse! :Retired))
+      (assert-native-not-retired! (:native_thread existing) flow)
+      (migration-current! flow existing)
+      ;; Caller holds the registry reservation; put-route! is one transaction.
+      ;; Preserve route_hold/state and every pending outcome; never replay here.
+      (save-route! (registry) flow replacement)
+      (str "Registered " flow ": " name " (" session ")"))
+    (catch Exception error
+      (if (:hm/migration-refusal (ex-data error)) (throw error)
+          (throw (ex-info "Migration observation or store failed"
+                          {:hm/failure true :hm/migration-refusal :ObservationOrStoreUnavailable}
+                          error))))))
+(defn register!
+  ([flow name session native-thread] (register! flow name session native-thread nil))
+  ([flow name session native-thread metadata]
+   (with-reservation flow
+     (fn []
+       (let [existing (load-route (registry) flow)]
+         (if (and existing (not-any? #(same-stable-route? existing %) (live-agents)))
+           (migrate-registration! flow existing name session native-thread metadata)
+           (binding [*with-reservation* (fn [_ operation] (operation))]
+             (register-live! flow name session native-thread metadata))))))))
 (defn live-pending-origin! [variant envelope]
   (let [origins (case variant
                   :psyche [(first (read-psyche-message envelope))]

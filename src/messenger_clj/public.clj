@@ -68,6 +68,7 @@
                      :else "RuntimeBindingOrStore"))
         rendered (cond
                    public? message
+                   (:hm/migration-refusal data) (str "MigrationRefused.{ " (runtime/quote-datom target) " " (name (:hm/migration-refusal data)) " }")
                    (:hm/retire-refusal data) (str "RetireRefused.{ " (runtime/quote-datom target) " " (name (:hm/retire-refusal data)) " }")
                    held (str "Held.{ " (runtime/quote-datom target) " " (second held) " " (nth held 2) " }")
                    uncertain (str "Uncertain.{ " (runtime/quote-datom target) " } Do not retry; inspect the retained runtime attempt.")

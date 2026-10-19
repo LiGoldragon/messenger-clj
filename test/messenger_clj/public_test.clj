@@ -300,3 +300,109 @@
        (store/put-route! root "aabbcc" (dissoc route :topic))
        (with-redefs [runtime/live-agents (constantly [])]
          (is (thrown-with-msg? Exception #"MetaflowMetadataRequired" (public/listing!))))))))
+
+(def moved-agent
+  (assoc route :pane_id "new-pane" :terminal_id "new-terminal" :agent_status "working"
+         :agent_session {:agent "codex" :kind "id" :source "herdr:codex"
+                         :value (:native_thread route)}))
+(defn migrate-fixture [root agents target-reader process-reader f]
+  (let [prompts (atom 0)]
+    (with-redefs [runtime/live-agents agents
+                  runtime/target-agent* target-reader
+                  runtime/process-info* (fn [& _] {:foreground_processes [{:pid 123}]})
+                  runtime/migration-process-start! process-reader
+                  runtime/migration-current! (fn [& _] nil)
+                  runtime/prompt!* (fn [& _] (swap! prompts inc))]
+      (f prompts))))
+(defn register-moved []
+  (public/register! target (:name route) (:session route) (:native_thread route)))
+
+(deftest same-native-pane-migration-preserves-real-held-intent-and-history
+  (in-registry
+   (fn [root]
+     (store/put-route! root "sender"
+                       (assoc route :pane_id "sender-pane" :terminal_id "sender-terminal"
+                              :native_thread "11111111-1111-1111-1111-111111111111"
+                              :aspect "Mind" :topic "tests" :layer "Primary"))
+     (with-redefs [runtime/live-agents (constantly [])]
+       (is (thrown-with-msg? Exception #"Held.*RepairRequired"
+                            (public/send! target "whole Unicode λ\nbody retained" false nil 0))))
+     (store/put-route! root "00f95a" (assoc route :route_hold "retain-this-hold"))
+     (let [before (store/route-for root "00f95a")
+           pending (store/pending-for root "00f95a")
+           history (store/metaflow-identities root)]
+       (migrate-fixture root (constantly [moved-agent]) (fn [& _] moved-agent)
+                        (constantly "12345")
+         (fn [prompts]
+           (is (= "Registered.{ «Field Core Secondary» }" (register-moved)))
+           (is (= (assoc before :pane_id "new-pane" :terminal_id "new-terminal")
+                  (store/route-for root "00f95a")))
+           (is (= pending (store/pending-for root "00f95a")))
+           (is (= history (store/metaflow-identities root)))
+           (is (zero? @prompts))))))))
+
+(deftest migration-refusals-do-not-change-route-or-ledger
+  (doseq [[label agents reader starts expected]
+          [[:missing (constantly []) (fn [& _] moved-agent) (constantly "1") "CandidateMissing"]
+           [:duplicate (constantly [moved-agent moved-agent]) (fn [& _] moved-agent) (constantly "1") "CandidateAmbiguous"]
+           [:native (constantly [(assoc-in moved-agent [:agent_session :value] "11111111-1111-1111-1111-111111111111")])
+            (fn [& _] moved-agent) (constantly "1") "NativeMismatch"]
+           [:unofficial (constantly [(dissoc moved-agent :agent_session)]) (fn [& _] moved-agent) (constantly "1") "OfficialNativeRequired"]
+           [:changed-readback (constantly [moved-agent]) (fn [& _] (assoc moved-agent :terminal_id "changed")) (constantly "1") "CandidateChanged"]
+           [:process-unknown (constantly [moved-agent]) (fn [& _] moved-agent)
+            (fn [_] (runtime/migration-refuse! :ProcessUnavailable)) "ProcessUnavailable"]]]
+    (in-registry
+     (fn [root]
+       (let [before (store/route-for root "00f95a")
+             pending (store/pending-for root "00f95a")
+             history (store/metaflow-identities root)]
+         (migrate-fixture root agents reader starts
+           (fn [prompts]
+             (is (thrown-with-msg? Exception (re-pattern (str "MigrationRefused.*" expected))
+                                  (register-moved)) (name label))
+             (is (= before (store/route-for root "00f95a")))
+             (is (= pending (store/pending-for root "00f95a")))
+             (is (= history (store/metaflow-identities root)))
+             (is (zero? @prompts)))))))))
+
+(deftest migration-rechecks-candidate-process-old-binding-and-ownership
+  (doseq [case [:moved-again :old-returned :pid-reused :foreign :transition :retired]]
+    (in-registry
+     (fn [root]
+       (when (= case :foreign)
+         (store/put-route! root "foreign" (assoc route :pane_id "new-pane" :terminal_id "new-terminal"
+                                                  :topic "other")))
+       (when (= case :transition)
+         (store/put-route! root "00f95a" (assoc route :transition true)))
+       (let [before (store/route-for root "00f95a")
+             pending (store/pending-for root "00f95a")
+             calls (atom 0) process-calls (atom 0)
+             retirement store/retirement-for]
+         (migrate-fixture root
+           (fn []
+             (let [n (swap! calls inc)]
+               (cond
+                 (and (= case :moved-again) (>= n 3)) [(assoc moved-agent :pane_id "third-pane")]
+                 (and (= case :old-returned) (>= n 3)) [moved-agent route]
+                 :else [moved-agent])))
+           (fn [& _] moved-agent)
+           (fn [_] (str (if (= case :pid-reused) (swap! process-calls inc) 1)))
+           (fn [prompts]
+             (with-redefs [store/retirement-for (fn [r id]
+                                                 (if (= case :retired) {:state "retired"}
+                                                     (retirement r id)))]
+               (is (thrown-with-msg? Exception #"MigrationRefused"
+                                    (if (= case :retired)
+                                      (public/named-call target #(runtime/migrate-registration! "00f95a" before (:name route) (:session route) (:native_thread route) (public/metadata target)))
+                                      (register-moved))) (name case)))
+             (is (= before (store/route-for root "00f95a")))
+             (is (zero? @prompts))))
+         (is (= pending (store/pending-for root "00f95a"))))))))
+
+(deftest migration-current-requires-exact-awake-holder
+  (doseq [answer ["Current.Unknown" "Current.Asleep" "Current.Awake.other" "malformed"]]
+    (binding [runtime/*shell* (fn [& _] {:exit 0 :out answer})]
+      (is (thrown-with-msg? Exception #"FlowHolderMismatch"
+                           (runtime/migration-current! "00f95a" route)))))
+  (binding [runtime/*shell* (fn [& _] {:exit 0 :out "Current.Awake.00f95a"})]
+    (is (nil? (runtime/migration-current! "00f95a" route)))))
