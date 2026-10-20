@@ -593,7 +593,17 @@
   (when-not (and (integer? pid) (pos? pid))
     (migration-refuse! :ProcessUnavailable))
   (try
-    (let [stat (slurp (str "/proc/" pid "/stat"))
+    (let [;; Native Babashka's buffered/slurp path seeks procfs and can fail
+          ;; EINVAL. Read directly; refuse empty, truncated or oversized records.
+          stat (with-open [input (java.io.FileInputStream. (str "/proc/" pid "/stat"))]
+                 (let [buffer (byte-array 8192)
+                       length (.read input buffer)]
+                   (when-not (and (pos? length) (< length (alength buffer)))
+                     (migration-refuse! :ProcessUnavailable))
+                   (String. buffer 0 length "UTF-8")))
+          _ (when-not (and (str/starts-with? stat (str pid " ("))
+                           (str/ends-with? stat "\n"))
+              (migration-refuse! :ProcessUnavailable))
           fields (str/split (subs stat (inc (.lastIndexOf stat ")"))) #"\s+")
           ;; Leading space is removed before indexing Linux stat fields 3..22.
           fields (vec (remove str/blank? fields))

@@ -459,3 +459,21 @@
              (is (= pending (store/pending-for root "00f95a")))
              (is (= history (store/metaflow-identities root)))
              (is (zero? @prompts)))))))))
+
+(deftest migration-reads-actual-own-process-start-without-mocking-helper
+  ;; Read the real test process independently, then exercise the production
+  ;; numeric-PID path. This test also runs in the packaged native Babashka.
+  (let [stat (with-open [input (java.io.FileInputStream. "/proc/self/stat")]
+               (let [buffer (byte-array 8192) length (.read input buffer)]
+                 (is (pos? length))
+                 (String. buffer 0 length "UTF-8")))
+        pid (Long/parseLong (first (str/split stat #" ")))
+        tail (str/trim (subs stat (inc (.lastIndexOf stat ")"))))
+        expected (nth (str/split tail #"\s+") 19)]
+    (is (re-matches #"[0-9]+" expected))
+    (is (= expected (runtime/migration-process-start! pid)))
+    (is (= expected (runtime/migration-process-start! pid)) "same live process retains its kernel start"))
+  (doseq [pid [0 -1 "self" Long/MAX_VALUE]]
+    (let [error (try (runtime/migration-process-start! pid) nil (catch Exception e e))]
+      (is (some? error))
+      (is (= :ProcessUnavailable (:hm/migration-refusal (ex-data error)))))))
