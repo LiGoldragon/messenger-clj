@@ -119,10 +119,8 @@ nix flake check
 (`check.nix`), and runs the Clojure test suite below as the `clj-tests` check,
 with the pinned pod and a stub `orchestrate`.
 
-Home manages `~/.local/bin/messenger-clj` and the `hm-*` command links from
-the immutable package. Its activation admits only exact legacy or known
-predecessor command bindings before replacement. The old
-`~/.local/libexec/messenger-clj` package pointer is not the command provider.
+The operating system's Home configuration installs this package in the user
+profile, which provides `messenger-clj` and every `hm-*` command on PATH.
 
 ## State continuity
 
@@ -131,8 +129,8 @@ select another root for tests and isolated operation. The old Python source and
 JSON state are retained only as frozen migration inputs.
 
 The installed launcher and this source select the typed state root
-`~/.local/state/messenger-clj`. Deployment replaces the package target behind
-all ten `hm-*` aliases atomically and does not move or rewrite that database.
+`~/.local/state/messenger-clj`. A Home switch replaces the package behind all
+ten `hm-*` commands and does not move or rewrite that database.
 
 Concurrent operations use unique Orchestrate lock names against the same state
 path. A competing operation waits for that path lock for a bounded interval;
